@@ -1,0 +1,306 @@
+/* ============================================================
+   Sidebar — shared component styles
+   ============================================================ */
+
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  background: var(--bg-base);
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  margin-bottom: 24px;
+}
+
+.homeLink {
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  transition: opacity var(--transition);
+}
+
+.homeLink:hover {
+  opacity: 0.7;
+}
+
+/* ── Ambient Animation ── */
+.audioWave {
+  display: flex;
+  align-items: flex-end;
+  gap: 3.5px;
+  height: 20px;
+  opacity: 0.9;
+}
+
+.waveBar {
+  width: 3.5px;
+  background-color: var(--accent);
+  border-radius: 2px;
+  transform-origin: bottom;
+  animation: ambientWave 2.8s ease-in-out infinite;
+}
+
+.waveBar:nth-child(1) { height: 8px; animation-delay: 0s; }
+.waveBar:nth-child(2) { height: 13px; animation-delay: 0.3s; }
+.waveBar:nth-child(3) { height: 17px; animation-delay: 0.6s; }
+.waveBar:nth-child(4) { height: 20px; animation-delay: 0.9s; }
+.waveBar:nth-child(5) { height: 17px; animation-delay: 1.2s; }
+.waveBar:nth-child(6) { height: 13px; animation-delay: 1.5s; }
+.waveBar:nth-child(7) { height: 8px; animation-delay: 1.8s; }
+
+@keyframes ambientWave {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+/* ── Nav items ── */
+.nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 12px;
+  gap: 4px;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: all var(--transition);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+
+.navIcon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.7;
+  transition: opacity var(--transition);
+}
+
+.navItem:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.navItem:hover .navIcon {
+  opacity: 1;
+}
+
+.navItemActive {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.navItemActive .navIcon {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.navItemLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+}
+
+/* ── Gated & Animation logic ── */
+.gatedItem {
+  justify-content: space-between;
+}
+
+.locked {
+  opacity: 0.35;
+  transition: opacity 300ms ease-out;
+}
+
+.unlocked {
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+
+.lockIcon {
+  width: 12px;
+  height: 12px;
+  color: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+  transition: opacity 150ms ease-out;
+}
+
+.lockIconHidden {
+  opacity: 0;
+}
+
+.sandboxDot {
+  position: absolute;
+  left: -14px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: #4AAD6A;
+  transform: scale(0);
+  transition: transform 150ms ease-out;
+  transform-origin: center;
+}
+
+.sandboxDotActive {
+  transform: scale(1);
+}
+
+/* Tooltip wrapper */
+.navItemWrapper {
+  position: relative;
+  width: 100%;
+}
+
+.tooltip {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1E1E20;
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+  white-space: nowrap;
+  z-index: 50;
+}
+
+.navItemWrapper:hover .locked + .tooltip {
+  opacity: 1;
+}
+
+.navSpacer {
+  flex: 1;
+}
+
+/* ── Era switcher ── */
+.eraSection {
+  height: 45vh;
+  min-height: 200px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  padding: 0; /* Fully extended to the edge of the toolbar */
+  margin-bottom: 16px;
+}
+
+.eraPills {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 0;
+}
+
+.eraPill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 0 12px;
+  background: transparent;
+  cursor: pointer;
+  border: none;
+  width: 100%;
+  text-align: center;
+  z-index: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.eraPill:first-child {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.eraPillText {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.35);
+  transition: color 180ms ease-out, text-shadow 180ms ease-out;
+  display: inline-block;
+}
+
+.eraPillActive {
+  background-color: transparent;
+}
+
+.eraPillActive .eraPillText {
+  color: var(--accent);
+}
+
+/* ── Peer Hover Logic ── */
+/* When hovering over the container, dim all inactive pills slightly */
+.eraPills:hover .eraPillText {
+  color: rgba(255, 255, 255, 0.2);
+  text-shadow: none;
+}
+
+/* Keep the active pill in its accent color */
+.eraPills:hover .eraPillActive .eraPillText {
+  color: var(--accent);
+}
+
+/* The specific pill being hovered lights up in its era accent */
+.eraPills:hover .eraPill:hover {
+  z-index: 10;
+}
+
+.eraPills:hover .eraPill:hover .eraPillText {
+  color: var(--accent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Active pill hovered stays full */
+.eraPills:hover .eraPillActive:hover .eraPillText {
+  color: var(--accent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ── Saved chains count ── */
+.savedCount {
+  padding: 0 16px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.savedCountNum {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ── Mobile: hide sidebar ── */
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+}

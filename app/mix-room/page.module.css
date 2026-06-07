@@ -1,0 +1,307 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background-color: var(--bg-base);
+}
+
+.contentArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 32px 40px 16px 40px;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.segmentedControl {
+  display: flex;
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  height: 32px;
+  padding: 2px;
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 150ms ease-out;
+}
+
+.segmentActive {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 0 40px 24px 40px;
+}
+
+.columns {
+  display: flex;
+  flex: 1;
+  gap: 24px;
+  padding: 0 40px 40px 40px;
+  min-height: 0; /* allows children to scroll if needed, though instruction said no scroll */
+}
+
+.leftColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.leftContent {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(-40px); /* Move it slightly higher */
+}
+
+.rightColumn {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Visualization Styles */
+.vizContainer {
+  position: relative;
+  width: 100%;
+  height: 360px;
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  overflow: hidden;
+  opacity: 0; /* For animation */
+}
+
+.xAxis {
+  display: flex;
+  position: relative;
+  height: 16px;
+  margin-top: 8px;
+}
+
+.xAxisLabel {
+  position: absolute;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  transform: translateX(-50%);
+}
+
+.legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legendColor {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.legendText {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.matchScoreSection {
+  margin-top: 32px;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  transition: all 300ms ease-out;
+}
+
+.matchScoreLeft {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.matchLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.matchNumber {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.matchSubtext {
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 220px;
+  text-align: left;
+  line-height: 1.4;
+}
+
+/* Right Column Cards */
+.reportHeader {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.badge {
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.cardsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.actionCard {
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.cardFreq {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.severityBadge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.cardInstruction {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.cardButton {
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: opacity 150ms ease-out;
+}
+
+.cardButton:hover {
+  opacity: 0.8;
+}
+
+/* Skeletons */
+.skeletonCard {
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skeletonLine {
+  height: 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+  100% { opacity: 0.4; }
+}
+
+/* Tooltip */
+.tooltipContainer {
+  position: relative;
+  display: flex;
+}
+
+.tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 150ms ease-out;
+  white-space: nowrap;
+}
+
+.tooltipContainer:hover .tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(-8px);
+}

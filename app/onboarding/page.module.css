@@ -1,0 +1,594 @@
+/* ============================================================
+   MimiQ Onboarding
+   ============================================================ */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 48px 24px;
+}
+
+/* ── Progress dots ── */
+.dots {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 48px;
+}
+
+@keyframes pixarBounce {
+  0% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  20% {
+    transform: translateY(-8px);
+    animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
+  }
+  40%, 100% {
+    transform: translateY(0);
+  }
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: background var(--transition);
+  animation: pixarBounce 2s infinite;
+  will-change: transform;
+}
+
+.dotActive {
+  background: var(--accent);
+}
+
+/* ── Step container ── */
+.stepContainer {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+}
+
+/* ── Step content ── */
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+/* Phase: resting / fully visible */
+.stepVisible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 320ms cubic-bezier(0.16, 1, 0.3, 1), transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Phase: animating out (lifts up + fades) */
+.stepExiting {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 320ms cubic-bezier(0.16, 1, 0.3, 1), transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Phase: positioned below, invisible, NO transition (instant snap) */
+.stepEntering {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: none;
+}
+
+/* ── Typography ── */
+.question {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  text-align: center;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.subtext {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 400px;
+}
+
+/* ── DAW grid (step 1) ── */
+.dawGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  width: 100%;
+  max-width: 440px;
+  margin-top: 16px;
+}
+
+.dawCard {
+  position: relative;
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  user-select: none;
+}
+
+.dawCard:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.dawCardSelected {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-color: var(--accent);
+}
+
+.dawCardSelected:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.dawName {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+/* ── Mic cards (step 2) ── */
+.micGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  width: 100%;
+  max-width: 680px;
+  margin-top: 16px;
+}
+
+.micCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 24px;
+  min-height: 160px;
+  height: 100%;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  user-select: none;
+}
+
+.micCard:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.micCardSelected {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-color: var(--accent);
+}
+
+.micCardSelected:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.micIcon {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+  transition: color 200ms;
+}
+
+.micCard:hover .micIcon {
+  color: var(--text-primary);
+}
+
+.micCardSelected .micIcon {
+  color: var(--accent);
+}
+
+.micName {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  pointer-events: none;
+  margin-bottom: 6px;
+}
+
+.micDesc {
+  position: relative;
+  z-index: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── Era cards (step 3) ── */
+.eraGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.eraCard {
+  position: relative;
+  width: 220px;
+  height: 140px;
+  border: none;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  user-select: none;
+}
+
+.eraCard::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60px;
+  height: 60px;
+  transform: translate(-50%, -50%);
+  background: var(--card-accent);
+  border-radius: 50%;
+  filter: blur(30px);
+  opacity: 0.1;
+  transition: all 400ms ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes auraBreathe {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; filter: blur(30px); }
+  50% { transform: translate(-50%, -50%) scale(1.6); opacity: 0.6; filter: blur(40px); }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; filter: blur(30px); }
+}
+
+.eraCard:hover {
+  transform: scale(1.1) translateY(-6px);
+  background: transparent;
+  border: none;
+}
+
+.eraCard:hover::before {
+  opacity: 0.5;
+  filter: blur(40px);
+  animation: auraBreathe 2.5s ease-in-out infinite;
+}
+
+.eraCardSelected {
+  transform: scale(1.15) translateY(-8px);
+  background: transparent;
+  border: none;
+}
+
+.eraCardSelected::before {
+  opacity: 0.7;
+  filter: blur(50px);
+  animation: auraBreathe 2s ease-in-out infinite;
+}
+
+.eraCardSelected:hover {
+  transform: scale(1.15) translateY(-8px);
+  background: transparent;
+}
+
+/* Change 1: Inter 500 lowercase — confident, quiet label */
+.eraName {
+  position: relative;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+  color: var(--card-accent);
+  z-index: 1;
+  pointer-events: none;
+  transition: all 300ms ease;
+}
+
+.eraCard:hover .eraName {
+  color: var(--text-primary);
+  text-shadow: 0 0 12px var(--card-accent), 0 0 24px color-mix(in srgb, var(--card-accent) 50%, transparent);
+}
+
+.eraCardSelected .eraName {
+  color: var(--text-primary);
+  text-shadow: 0 0 16px var(--card-accent), 0 0 32px var(--card-accent);
+  font-weight: 600;
+}
+
+.eraCustomLabel {
+  display: block;
+  font-family: var(--font-body), sans-serif;
+  font-size: 14px;
+  opacity: 0.85;
+  margin-top: 4px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.eraDesc {
+  position: relative;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  line-height: 1.3;
+  z-index: 1;
+  pointer-events: none;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: color 300ms ease, opacity 300ms ease;
+  margin-top: 8px;
+}
+
+.eraCard:hover .eraDesc {
+  color: color-mix(in srgb, var(--card-accent) 80%, white);
+}
+
+.eraCardSelected .eraDesc {
+  color: color-mix(in srgb, var(--card-accent) 90%, white);
+  opacity: 1;
+}
+
+/* ── Plugins Grid (Step 3) ── */
+.pluginSearchWrapper {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pluginSearchInput {
+  width: 100%;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  padding: 0 20px;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+  transition: all 200ms ease;
+}
+
+.pluginSearchInput:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pluginSearchInput::placeholder {
+  color: var(--text-tertiary);
+}
+
+.pluginTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pluginTag {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pluginTagRemove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pluginTagRemove:hover {
+  color: var(--text-primary);
+}
+
+.pluginGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  width: 100%;
+  max-width: 440px;
+  margin-top: 16px;
+}
+
+.pluginCard {
+  position: relative;
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  user-select: none;
+}
+
+.pluginCard:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.pluginCardSelected {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-color: var(--accent);
+}
+
+.pluginCardSelected:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.pluginName {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+.pluginActions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 16px;
+}
+
+.pluginSkipButton {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  transition: color 200ms ease;
+}
+
+.pluginSkipButton:hover {
+  color: var(--text-primary);
+}
+
+/* ── Go button ── */
+.goButton {
+  width: 100%;
+  max-width: 424px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--text-primary);
+  color: var(--bg-base);
+  border: none;
+  border-radius: 12px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: opacity 800ms cubic-bezier(0.16, 1, 0.3, 1), 
+              transform 800ms cubic-bezier(0.16, 1, 0.3, 1), 
+              max-height 800ms cubic-bezier(0.16, 1, 0.3, 1), 
+              margin-top 800ms cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+.goButton:hover {
+  opacity: 0.85;
+}
+
+.goButton:disabled {
+  cursor: default;
+}
+
+.goButtonHidden {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  max-height: 0;
+  margin-top: 0;
+}
+
+.goButtonVisible {
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 48px;
+  margin-top: 8px;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .dawGrid {
+    grid-template-columns: 1fr;
+    max-width: 340px;
+  }
+
+  .micGrid {
+    grid-template-columns: 1fr;
+    max-width: 340px;
+  }
+
+  .eraCard {
+    width: calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .pluginGrid {
+    grid-template-columns: 1fr;
+    max-width: 340px;
+  }
+
+  .pluginSearchWrapper {
+    max-width: 100%;
+  }
+
+  .eraGrid {
+    width: 100%;
+    max-width: 424px;
+  }
+
+  .goButton {
+    max-width: 100%;
+  }
+}

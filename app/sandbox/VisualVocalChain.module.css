@@ -1,0 +1,246 @@
+.container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* Let clicks pass through */
+}
+
+.svgLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+
+.glowingPath {
+  fill: none;
+  stroke: var(--wire-color, var(--accent));
+  stroke-width: var(--wire-width, 1.5px);
+  stroke-opacity: 0;
+  stroke-dasharray: 4000;
+  stroke-dashoffset: 4000;
+  animation: drawLineLightning 2000ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  transition: stroke-opacity 150ms ease-out, stroke-width 150ms ease-out;
+}
+
+/* Main chain wires — lit signal path */
+.mainWire {
+  --wire-color: var(--accent);
+  --wire-width: 1.5px;
+  --wire-opacity: 0.7;
+}
+
+.mainWire:hover {
+  --wire-opacity: 1;
+  --wire-width: 2px;
+}
+
+/* Auxiliary bus wires — secondary infrastructure */
+.auxWire {
+  --wire-color: rgba(255, 255, 255, 0.18);
+  --wire-width: 1px;
+  --wire-opacity: 1;
+}
+
+.auxWire:hover {
+  --wire-color: rgba(255, 255, 255, 0.35);
+}
+
+@keyframes drawLineLightning {
+  0% {
+    stroke-dashoffset: 4000;
+    stroke-opacity: 0;
+  }
+  20% {
+    stroke-opacity: 1;
+    stroke-width: 3.5px;
+  }
+  70% {
+    stroke-dashoffset: 0;
+    stroke-opacity: 1;
+    stroke-width: 3.5px;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    stroke-opacity: var(--wire-opacity, 0.7);
+    stroke-width: var(--wire-width, 1.5px);
+  }
+}
+
+/* ── Main Chain Area ── */
+.mainChainArea {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 700px;
+  padding: 80px 32px 350px 32px; /* Bottom padding ensures space for buses */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto; /* Make nodes clickable */
+}
+
+.mainChain {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Buses Area (Full Width Bottom) ── */
+.busesArea {
+  position: absolute;
+  bottom: 80px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 60px;
+  padding: 40px;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.busRow {
+  display: flex;
+  gap: 60px;
+}
+
+.busRowStaggered {
+  margin-left: 110px;
+}
+
+.masteringNode {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 30px 4px color-mix(in srgb, var(--accent) 50%, transparent) !important;
+  transform: scale(1.05);
+}
+
+.busColumn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ── Output Node Container ── */
+.outputWrapper {
+  position: relative;
+  flex-shrink: 0;
+  margin-top: 32px;
+}
+
+/* ── Nodes ── */
+.nodeWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(30px) scale(0.90);
+  animation: fadeNode 3.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes fadeNode {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.node {
+  background: color-mix(in srgb, var(--accent) 5%, rgba(255, 255, 255, 0.03));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 12px 32px; /* Reverted to larger padding */
+  min-width: 180px;  /* Reverted to larger width */
+  text-align: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 4%, transparent),
+              inset 0 0 12px color-mix(in srgb, var(--accent) 5%, transparent);
+  transition: all var(--transition);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.node:hover {
+  background: color-mix(in srgb, var(--accent) 10%, rgba(255, 255, 255, 0.05));
+  border-color: color-mix(in srgb, var(--accent) 40%, rgba(255, 255, 255, 0.2));
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 8%, transparent),
+              inset 0 0 16px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.nodeLabel {
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.nodeAction {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+/* Connection Dots */
+.connectionDot {
+  position: absolute;
+  border-radius: 50%;
+}
+
+/* Main chain connector dots — 4px, accent at 0.9 opacity */
+.connectionDot {
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  opacity: 0.9;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.dotHorizontal.dotLeft { left: -2px; top: calc(50% - 2px); }
+.dotHorizontal.dotRight { right: -2px; top: calc(50% - 2px); }
+.dotVertical.dotTop { top: -2px; left: calc(50% - 2px); }
+.dotVertical.dotBottom { bottom: -2px; left: calc(50% - 2px); }
+
+/* Auxiliary bus connector dots — 3px, muted white */
+.auxConnectionDot {
+  width: 3px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  opacity: 1;
+  box-shadow: none;
+}
+
+.auxConnectionDot.dotHorizontal.dotLeft { left: -1.5px; top: calc(50% - 1.5px); }
+.auxConnectionDot.dotHorizontal.dotRight { right: -1.5px; top: calc(50% - 1.5px); }
+.auxConnectionDot.dotVertical.dotTop { top: -1.5px; left: calc(50% - 1.5px); }
+.auxConnectionDot.dotVertical.dotBottom { bottom: -1.5px; left: calc(50% - 1.5px); }
+
+/* Source Dot (Starts the chain) */
+.sourceDotWrapper {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+  animation: fadeNode 0.4s ease-out forwards;
+}
+
+.sourceDot {
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--accent), 0 0 24px var(--accent);
+}

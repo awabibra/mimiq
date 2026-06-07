@@ -1,0 +1,267 @@
+/* ============================================================
+   MimiQ Landing Page
+   ============================================================ */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* ── Hero ── */
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 1080px;
+  width: 100%;
+  padding: 0 48px;
+  gap: 64px;
+  margin: 0 auto;
+}
+
+.heroContent {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  flex: 1;
+  min-width: 0;
+}
+
+.heroHeadline {
+  font-size: 36px;
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.heroSubline {
+  font-size: 15px;
+  color: var(--text-secondary);
+  max-width: 480px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.ctaButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 24px;
+  border: 0.5px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+  width: fit-content;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+}
+
+.ctaButton:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.heroSmall {
+  font-size: var(--fs-secondary);
+  color: var(--text-tertiary);
+}
+
+.heroVisual {
+  flex-shrink: 0;
+}
+
+/* ── How it works ── */
+.howItWorks {
+  max-width: 1080px;
+  width: 100%;
+  padding: 80px 48px;
+  margin: 0 auto;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.stepCard {
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-card);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: box-shadow var(--transition);
+}
+
+.stepCard:hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.stepNumber {
+  font-size: var(--fs-label);
+  color: var(--text-tertiary);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0.04em;
+}
+
+.stepIcon {
+  width: 32px;
+  height: 32px;
+  color: var(--text-secondary);
+}
+
+.stepTitle {
+  font-size: var(--fs-heading);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.stepText {
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Era strip ── */
+.eras {
+  max-width: 1080px;
+  width: 100%;
+  padding: 80px 48px;
+  margin: 0 auto;
+}
+
+.erasLabel {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-tertiary);
+  margin-bottom: 24px;
+  display: block;
+  font-weight: var(--fw-medium);
+}
+
+.eraCards {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.eraCards::-webkit-scrollbar {
+  display: none;
+}
+
+.eraCard {
+  width: 160px;
+  min-width: 160px;
+  height: 80px;
+  border-radius: var(--radius-card);
+  border: 0.5px solid var(--border-default);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  transition: box-shadow var(--transition);
+}
+
+.eraCard:hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.eraName {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+}
+
+.eraDesc {
+  font-size: var(--fs-label);
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+/* ── Final CTA ── */
+.finalCta {
+  max-width: 1080px;
+  width: 100%;
+  padding: 80px 48px 120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+}
+
+.finalHeading {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.finalSubtext {
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+  max-width: 420px;
+  line-height: 1.6;
+  margin: 0;
+  margin-bottom: 8px;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .hero {
+    flex-direction: column;
+    padding: 96px 24px 48px;
+    gap: 48px;
+    justify-content: center;
+  }
+
+  .heroContent {
+    align-items: center;
+    text-align: center;
+  }
+
+  .heroSubline {
+    max-width: 100%;
+  }
+
+  .heroHeadline {
+    font-size: 28px;
+  }
+
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .howItWorks,
+  .eras,
+  .finalCta {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  .finalCta {
+    padding-bottom: 80px;
+  }
+}
