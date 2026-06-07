@@ -5,8 +5,8 @@ import { NextRequest } from "next/server";
 export const runtime = "edge";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://dummy.supabase.co",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "dummy-key"
 );
 
 // Era color lookup — mirrors lib/eras.ts for the edge runtime
