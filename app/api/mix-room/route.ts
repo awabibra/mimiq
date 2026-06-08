@@ -1,91 +1,99 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import type { CollisionZone } from "@/lib/types";
 
 const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || "dummy", // fallback so it doesn't crash if env missing during build
+  apiKey: process.env.ANTHROPIC_API_KEY || "dummy",
 });
+
+interface MixRoomRequest {
+  collisions?: CollisionZone[];
+  daw?: string;
+  genre?: string;
+}
+
+function formatFreq(freq: number) {
+  if (freq >= 1000) {
+    const khz = freq / 1000;
+    return `${khz >= 10 ? khz.toFixed(0) : khz.toFixed(1)} kHz`;
+  }
+
+  return `${Math.round(freq)} Hz`;
+}
+
+function pluginForDaw(daw: string) {
+  const lower = daw.toLowerCase();
+  if (lower.includes("fl")) return "Fruity Parametric EQ 2";
+  if (lower.includes("ableton")) return "EQ Eight";
+  if (lower.includes("logic")) return "Channel EQ";
+  if (lower.includes("pro tools")) return "EQ III";
+  if (lower.includes("studio one")) return "Pro EQ";
+  return "your stock EQ";
+}
+
+function fallbackExplanation(collisions: CollisionZone[], daw: string) {
+  const first = collisions[0];
+  if (!first) {
+    return "The vocal and beat are not fighting in any major spot right now. Keep the vocal centered and make small EQ moves only if a word starts disappearing.";
+  }
+
+  return `The main fight is around ${formatFreq(first.centerFreq)}, where the beat and vocal are both loud. Open ${pluginForDaw(daw)} and make a small cut on the beat at ${formatFreq(first.centerFreq)} so the vocal can sit forward without turning it up.`;
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { vocalSpectrum, beatSpectrum, daw, era } = body;
+    const body = (await req.json()) as MixRoomRequest;
+    const daw = body.daw || "Logic Pro";
+    const genre = body.genre || "rap";
+    const topCollisions = Array.isArray(body.collisions)
+      ? body.collisions.slice(0, 3)
+      : [];
 
-    // We don't have real spectral data in the mock so we'll pass generic text based on if beat is present
-    const hasBeat = !!beatSpectrum;
-
-    if (!hasBeat) {
+    if (topCollisions.length === 0) {
       return NextResponse.json({
-        collisions: [
-          {
-            frequencyRange: "All Frequencies",
-            severity: "MED",
-            instruction: "Upload a beat in the Sandbox to analyze frequency collisions between your vocal and the instrumental.",
-          },
-        ],
-        matchScore: 0,
-        summary: "Waiting for beat context to analyze collisions."
+        explanation: fallbackExplanation([], daw),
       });
     }
 
-    const systemPrompt = `You are a mixing engineer. A bedroom producer has uploaded a vocal and beat.
-Respond ONLY in valid JSON with this structure: { "collisions": [{ "frequencyRange": "string", "severity": "HIGH" | "MED" | "LOW", "instruction": "string" }], "matchScore": number, "summary": "string" }`;
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json({
+        explanation: fallbackExplanation(topCollisions, daw),
+      });
+    }
 
-    const userMessage = `Here is the frequency analysis:
-Vocal spectral centroid: ~2.5 kHz
-Beat low-end energy: High
-Estimated collision zones: 200-500Hz, 3-5kHz
-DAW: ${daw || "FL Studio"}
-Era: ${era || "2010s"}
+    const prompt = `These are frequency collision zones between a ${genre} vocal and beat:
+${JSON.stringify(topCollisions)}
 
-Identify up to 4 specific frequency collision problems. For each, give:
-- frequencyRange: string (e.g. '200-500 Hz')
-- severity: 'HIGH' | 'MED' | 'LOW'  
-- instruction: one sentence, specific dB values and frequency targets, DAW-specific plugin name.`;
+In 2-3 sentences, explain to a bedroom rapper what this means and exactly what to do.
+Use plain English. No jargon. Be specific about which plugin to use in ${daw}.
+Return only the explanation text, no JSON.`;
 
-    // Try calling Anthropic API. If it fails (e.g., missing API key), fallback to dummy data
     try {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        throw new Error("No API Key");
-      }
-      
       const msg = await anthropic.messages.create({
         model: "claude-3-5-sonnet-20241022",
-        max_tokens: 1024,
-        temperature: 0.7,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userMessage }],
+        max_tokens: 220,
+        temperature: 0.4,
+        messages: [{ role: "user", content: prompt }],
       });
 
-      const text = (msg.content[0] as any).text;
-      
-      // Clean up potential markdown formatting
-      const jsonStr = text.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(jsonStr);
-      
-      return NextResponse.json(parsed);
+      const firstContent = msg.content[0];
+      const explanation =
+        firstContent?.type === "text" ? firstContent.text.trim() : "";
 
-    } catch (apiError) {
-      console.warn("Anthropic API failed or missing key, using fallback data", apiError);
       return NextResponse.json({
-        collisions: [
-          {
-            frequencyRange: "200–500 Hz",
-            severity: "HIGH",
-            instruction: `Your beat's low-mid frequencies are masking your vocal warmth. Apply a −2dB cut at 350Hz on your beat track using ${daw === "Ableton" ? "EQ Eight" : "Fruity Parametric EQ 2"} while the vocal plays.`,
-          },
-          {
-            frequencyRange: "3–5 kHz",
-            severity: "MED",
-            instruction: "Vocal presence is clashing with hi-hats. Try a dynamic EQ cut of -1.5dB around 4kHz on the instrumental.",
-          }
-        ],
-        matchScore: 65,
-        summary: "Two frequency clashes are pulling your vocal back."
+        explanation: explanation || fallbackExplanation(topCollisions, daw),
+      });
+    } catch (apiError) {
+      console.warn("Mix room Claude explanation failed:", apiError);
+      return NextResponse.json({
+        explanation: fallbackExplanation(topCollisions, daw),
       });
     }
-
-  } catch (error: any) {
-    console.error("Mix room API error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    console.error("Mix room explanation error:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Mix room failed" },
+      { status: 500 }
+    );
   }
 }

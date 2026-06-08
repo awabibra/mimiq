@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { AnalysisResponse, LevelLabResponse } from '@/lib/types';
 
 interface AudioState {
   vocalFileUrl: string | null;
   beatFileUrl: string | null;
-  analysisResult: any | null;
+  analysisResult: AnalysisResponse | null;
   processedFileUrl: string | null;
-  processedAnalysis: any | null;
+  processedAnalysis: LevelLabResponse | null;
   isAnalyzed: boolean;
   currentXyPosition: { x: number; y: number };
   setSession: (data: Partial<AudioState>) => void;

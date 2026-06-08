@@ -1,5 +1,7 @@
 import { CTALink } from "@/components/CTALink";
+import { LandingTopBar } from "@/components/LandingTopBar";
 import { PageTransition } from "@/components/PageTransition";
+import { StartGate } from "@/components/StartGate";
 import styles from "./page.module.css";
 import { eras } from "@/lib/eras";
 import { XYPad } from "@/components/XYPad";
@@ -71,112 +73,116 @@ function ListIcon() {
 
 export default function Home() {
   return (
-    <PageTransition>
-      <main className={styles.main}>
-        {/* ═══════════════════════════════════════════
-            SECTION 1 — Hero
-            ═══════════════════════════════════════════ */}
-        <section className={styles.hero}>
-          <div className={styles.heroContent}>
-            <h1 className={styles.heroHeadline}>
-              Your vocal.
-              <br />
-              Your exact chain.
-            </h1>
-            <p className={styles.heroSubline}>
-              Upload your raw vocal. MimiQ measures it, then tells you exactly
-              how to mix it&nbsp;— step by step, for your DAW.
+    <StartGate>
+      <PageTransition>
+        <main className={styles.main}>
+          <LandingTopBar />
+
+          {/* ═══════════════════════════════════════════
+              SECTION 1 — Hero
+              ═══════════════════════════════════════════ */}
+          <section className={styles.hero}>
+            <div className={styles.heroContent}>
+              <h1 className={styles.heroHeadline}>
+                Your vocal.
+                <br />
+                Your exact chain.
+              </h1>
+              <p className={styles.heroSubline}>
+                Upload your raw vocal. MimiQ measures it, then tells you exactly
+                how to mix it&nbsp;— step by step, for your DAW.
+              </p>
+              <CTALink href="/onboarding" className={styles.ctaButton}>
+                Analyse your vocal free
+              </CTALink>
+              <span className={styles.heroSmall}>
+                3 free analyses. No credit card.
+              </span>
+            </div>
+
+            <div className={styles.heroVisual}>
+              <XYPad />
+            </div>
+          </section>
+
+          {/* ═══════════════════════════════════════════
+              SECTION 2 — How it works
+              ═══════════════════════════════════════════ */}
+          <section className={styles.howItWorks}>
+            <div className={styles.steps}>
+              {/* Step 1 */}
+              <div className={styles.stepCard}>
+                <span className={styles.stepNumber}>01</span>
+                <UploadIcon />
+                <h3 className={styles.stepTitle}>Upload your vocal</h3>
+                <p className={styles.stepText}>
+                  Drop in your raw, unprocessed vocal. 30–60&nbsp;seconds is
+                  enough.
+                </p>
+              </div>
+
+              {/* Step 2 */}
+              <div className={styles.stepCard}>
+                <span className={styles.stepNumber}>02</span>
+                <WaveformIcon />
+                <h3 className={styles.stepTitle}>MimiQ measures it</h3>
+                <p className={styles.stepText}>
+                  We analyze loudness, dynamics, frequency balance, and how your
+                  vocal sits against your beat.
+                </p>
+              </div>
+
+              {/* Step 3 */}
+              <div className={styles.stepCard}>
+                <span className={styles.stepNumber}>03</span>
+                <ListIcon />
+                <h3 className={styles.stepTitle}>Get your exact chain</h3>
+                <p className={styles.stepText}>
+                  A numbered, DAW-specific mixing chain tailored to your voice.
+                  Open your DAW and follow the steps.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* ═══════════════════════════════════════════
+              SECTION 3 — Era strip
+              ═══════════════════════════════════════════ */}
+          <section className={styles.eras}>
+            <span className={styles.erasLabel}>Five sonic worlds. One app.</span>
+            <div className={styles.eraCards}>
+              {eras.map((era) => (
+                <div
+                  key={era.id}
+                  className={styles.eraCard}
+                  style={{ background: era.subtleGradient }}
+                >
+                  <span className={styles.eraName} style={{ color: era.accent }}>
+                    {era.name}
+                  </span>
+                  <span className={styles.eraDesc}>
+                    {era.description.split(" — ")[0]}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ═══════════════════════════════════════════
+              SECTION 4 — Final CTA
+              ═══════════════════════════════════════════ */}
+          <section className={styles.finalCta}>
+            <h2 className={styles.finalHeading}>Ready to stop guessing?</h2>
+            <p className={styles.finalSubtext}>
+              Join producers who&apos;ve stopped watching tutorials and started
+              hearing results.
             </p>
             <CTALink href="/onboarding" className={styles.ctaButton}>
-              Analyze your vocal free
+              Analyse your vocal free
             </CTALink>
-            <span className={styles.heroSmall}>
-              3 free analyses. No credit card.
-            </span>
-          </div>
-
-          <div className={styles.heroVisual}>
-            <XYPad />
-          </div>
-        </section>
-
-        {/* ═══════════════════════════════════════════
-            SECTION 2 — How it works
-            ═══════════════════════════════════════════ */}
-        <section className={styles.howItWorks}>
-          <div className={styles.steps}>
-            {/* Step 1 */}
-            <div className={styles.stepCard}>
-              <span className={styles.stepNumber}>01</span>
-              <UploadIcon />
-              <h3 className={styles.stepTitle}>Upload your vocal</h3>
-              <p className={styles.stepText}>
-                Drop in your raw, unprocessed vocal. 30–60&nbsp;seconds is
-                enough.
-              </p>
-            </div>
-
-            {/* Step 2 */}
-            <div className={styles.stepCard}>
-              <span className={styles.stepNumber}>02</span>
-              <WaveformIcon />
-              <h3 className={styles.stepTitle}>MimiQ measures it</h3>
-              <p className={styles.stepText}>
-                We analyze loudness, dynamics, frequency balance, and how your
-                vocal sits against your beat.
-              </p>
-            </div>
-
-            {/* Step 3 */}
-            <div className={styles.stepCard}>
-              <span className={styles.stepNumber}>03</span>
-              <ListIcon />
-              <h3 className={styles.stepTitle}>Get your exact chain</h3>
-              <p className={styles.stepText}>
-                A numbered, DAW-specific mixing chain tailored to your voice.
-                Open your DAW and follow the steps.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* ═══════════════════════════════════════════
-            SECTION 3 — Era strip
-            ═══════════════════════════════════════════ */}
-        <section className={styles.eras}>
-          <span className={styles.erasLabel}>Five sonic worlds. One app.</span>
-          <div className={styles.eraCards}>
-            {eras.map((era) => (
-              <div
-                key={era.id}
-                className={styles.eraCard}
-                style={{ background: era.subtleGradient }}
-              >
-                <span className={styles.eraName} style={{ color: era.accent }}>
-                  {era.name}
-                </span>
-                <span className={styles.eraDesc}>
-                  {era.description.split(" — ")[0]}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* ═══════════════════════════════════════════
-            SECTION 4 — Final CTA
-            ═══════════════════════════════════════════ */}
-        <section className={styles.finalCta}>
-          <h2 className={styles.finalHeading}>Ready to stop guessing?</h2>
-          <p className={styles.finalSubtext}>
-            Join producers who&apos;ve stopped watching tutorials and started
-            hearing results.
-          </p>
-          <CTALink href="/onboarding" className={styles.ctaButton}>
-            Analyze your vocal free
-          </CTALink>
-        </section>
-      </main>
-    </PageTransition>
+          </section>
+        </main>
+      </PageTransition>
+    </StartGate>
   );
 }

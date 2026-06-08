@@ -45,3 +45,6 @@ mimiq-app/
 backend/venv/
 __pycache__/
 *.pyc
+
+# Supabase CLI
+supabase/.temp/

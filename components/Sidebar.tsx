@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { eras, type Era } from "@/lib/eras";
+import { useAuth } from "@/lib/useAuth";
 import { useAudioStore } from "@/lib/useAudioStore";
+import { useProject } from "@/lib/useProject";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
@@ -11,6 +13,7 @@ interface SidebarProps {
   activeEra: Era;
   onEraChange: (era: Era) => void;
   savedCount: number;
+  dimNavItems?: boolean;
 }
 
 function SlidersIcon({ className }: { className?: string }) {
@@ -64,33 +67,55 @@ function LockIcon({ className }: { className?: string }) {
   );
 }
 
+function SignOutIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  );
+}
+
 export function Sidebar({
   activePage,
   activeEra,
   onEraChange,
   savedCount,
+  dimNavItems = false,
 }: SidebarProps) {
   const [isHydrated, setIsHydrated] = useState(false);
   const [unlockStage, setUnlockStage] = useState(0);
 
   const storeIsAnalyzed = useAudioStore((state) => state.isAnalyzed);
   const isAnalyzed = isHydrated ? storeIsAnalyzed : false;
+  const activeProjectName = useProject((state) => state.project?.name);
+  const signOut = useAuth((state) => state.signOut);
 
   useEffect(() => {
-    setIsHydrated(true);
+    const frame = requestAnimationFrame(() => setIsHydrated(true));
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // Trigger staggered animations via state stages when isAnalyzed flips to true
   useEffect(() => {
     if (!isHydrated) return;
+    let frame: number;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     
     if (isAnalyzed) {
       // Small tick to ensure class flips after render if it mounted already analyzed
-      setUnlockStage(1); // Mix Room unlocks
-      const t = setTimeout(() => setUnlockStage(2), 100); // Level Lab unlocks
-      return () => clearTimeout(t);
+      frame = requestAnimationFrame(() => {
+        setUnlockStage(1); // Mix Room unlocks
+        timer = setTimeout(() => setUnlockStage(2), 100); // Level Lab unlocks
+      });
+      return () => {
+        cancelAnimationFrame(frame);
+        if (timer) clearTimeout(timer);
+      };
     } else {
-      setUnlockStage(0);
+      frame = requestAnimationFrame(() => setUnlockStage(0));
+      return () => cancelAnimationFrame(frame);
     }
   }, [isAnalyzed, isHydrated]);
 
@@ -106,7 +131,7 @@ export function Sidebar({
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brandRow}>
-        <Link href="/" className={styles.homeLink} aria-label="MimiQ Home">
+        <Link href="/projects" className={styles.homeLink} aria-label="MimiQ Projects">
           <div className={styles.audioWave}>
             <div className={styles.waveBar} />
             <div className={styles.waveBar} />
@@ -119,7 +144,17 @@ export function Sidebar({
         </Link>
       </div>
 
-      <nav className={styles.nav}>
+      <Link
+        href="/projects"
+        className={`${styles.projectContext} ${dimNavItems ? styles.navDimmed : ""}`}
+      >
+        <span className={styles.projectContextLabel}>Project</span>
+        <span className={styles.projectContextName}>
+          {activeProjectName ?? "Select a project"}
+        </span>
+      </Link>
+
+      <nav className={`${styles.nav} ${dimNavItems ? styles.navDimmed : ""}`}>
         <Link
           href="/sandbox"
           className={`${styles.navItem} ${
@@ -183,6 +218,9 @@ export function Sidebar({
             <LayersIcon className={styles.navIcon} />
             Vault
           </div>
+          {savedCount > 0 && (
+            <span className={styles.savedCountNum}>{savedCount}</span>
+          )}
         </Link>
 
         <div style={{ height: "32px", flexShrink: 0 }} />
@@ -209,8 +247,19 @@ export function Sidebar({
             ))}
           </div>
         </div>
+
+        <button
+          type="button"
+          className={styles.navItem}
+          onClick={() => void signOut()}
+          aria-label="Sign out"
+          title="Sign out"
+        >
+          <div className={styles.navItemLeft}>
+            <SignOutIcon className={styles.navIcon} />
+          </div>
+        </button>
       </nav>
     </aside>
   );
 }
-

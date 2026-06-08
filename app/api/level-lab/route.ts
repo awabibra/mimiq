@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { eras } from "@/lib/eras";
-import type { AudioMetrics, LevelLabResponse } from "@/lib/types";
+import type { AudioMetrics, LevelLabResponse, LevelMetrics } from "@/lib/types";
 
 /* ═══════════════════════════════════════════════════════════════
    Constants
@@ -16,9 +16,13 @@ const CLAUDE_MAX_TOKENS = 1000;
    ═══════════════════════════════════════════════════════════════ */
 
 let _anthropic: Anthropic | null = null;
-function getAnthropicClient(): Anthropic {
+function getAnthropicClient(): Anthropic | null {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return null;
+  }
+
   if (!_anthropic) {
-    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "dummy" });
+    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
   return _anthropic;
 }
@@ -29,24 +33,29 @@ function getAnthropicClient(): Anthropic {
 
 function buildPrompt(
   rawMetrics: AudioMetrics,
-  processedMetrics: AudioMetrics,
+  processedMetrics: LevelMetrics,
   daw: string,
   eraId: string
 ): string {
   const era = eras.find((e) => e.id === eraId);
   const eraTarget = era ? `${era.name}: ${era.description}` : "General hip-hop vocal production.";
+  const afterCentroid =
+    processedMetrics.spectralCentroid == null
+      ? "not measured by the processed analysis"
+      : `${(processedMetrics.spectralCentroid / 1000).toFixed(2)}kHz`;
 
   return `You are a mixing engineer reviewing a bedroom producer's progress. Here are two analyses of the same vocal — before and after applying a mixing chain:
 
 BEFORE: LUFS ${rawMetrics.lufs.toFixed(1)}, dynamic range ${rawMetrics.dynamicRange.toFixed(1)}dB, spectral centroid ${(rawMetrics.spectralCentroid / 1000).toFixed(2)}kHz
-AFTER: LUFS ${processedMetrics.lufs.toFixed(1)}, dynamic range ${processedMetrics.dynamicRange.toFixed(1)}dB, spectral centroid ${(processedMetrics.spectralCentroid / 1000).toFixed(2)}kHz
+AFTER: LUFS ${processedMetrics.lufs.toFixed(1)}, dynamic range ${processedMetrics.dynamicRange.toFixed(1)}dB, true peak ${processedMetrics.truePeak.toFixed(1)}dBFS, spectral centroid ${afterCentroid}
 
 DAW: ${daw}. Era target: ${eraTarget}.
 
 Evaluate the improvement. Focus strictly on how well they achieved modern vocal standards based on the metrics. 
 - LUFS target is generally between -18 and -12 for a vocal stem depending on the era.
 - Dynamic range target is usually tighter (e.g., 4-8 dB) for modern genres, whereas raw is often 10-15+ dB.
-- Spectral centroid shift indicates EQ changes.
+- True peak should usually leave at least 1dB of headroom.
+- If processed spectral centroid was not measured, do not comment on brightness as if it was measured.
 
 Respond ONLY in valid JSON conforming exactly to the requested schema.`;
 }
@@ -104,9 +113,11 @@ function parseClaudeResponse(raw: string): Omit<LevelLabResponse, "processedMetr
 }
 
 async function callClaudeWithRetry(
-  prompt: string
+  prompt: string,
+  fallback: Omit<LevelLabResponse, "processedMetrics">
 ): Promise<Omit<LevelLabResponse, "processedMetrics">> {
   const client = getAnthropicClient();
+  if (!client) return fallback;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -130,22 +141,100 @@ async function callClaudeWithRetry(
     }
   }
 
-  // Fallback if Claude completely fails
-  return {
-    sessionScore: 70,
-    loudnessVerdict: "Loudness improved",
-    dynamicsVerdict: "Dynamics are tighter",
-    brightnessVerdict: "Tone is brighter",
-    gainRideCallout: "Watch out for occasional syllable spikes.",
-    nextStep: "Use a limiter to catch final peaks.",
-  };
+  return fallback;
 }
 
 /* ═══════════════════════════════════════════════════════════════
    Audio service call
    ═══════════════════════════════════════════════════════════════ */
 
-async function analyzeAudio(file: File): Promise<AudioMetrics> {
+const parseMetricNumber = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const requiredMetric = (value: unknown, label: string) => {
+  const parsed = parseMetricNumber(value);
+  if (parsed == null) {
+    throw new Error(`Audio service did not return ${label}.`);
+  }
+
+  return parsed;
+};
+
+function normalizeServiceMetrics(raw: unknown): LevelMetrics {
+  const data = raw as {
+    vocal?: Record<string, unknown>;
+  };
+  const vocal = data.vocal ?? (raw as Record<string, unknown>);
+  const spectralCentroid = parseMetricNumber(
+    vocal.spectral_centroid ?? vocal.spectralCentroid
+  );
+  const centroidHz =
+    spectralCentroid != null && spectralCentroid < 100
+      ? spectralCentroid * 1000
+      : spectralCentroid;
+
+  return {
+    lufs: requiredMetric(vocal.lufs_integrated ?? vocal.lufs, "LUFS"),
+    dynamicRange: requiredMetric(
+      vocal.dynamic_range ?? vocal.dynamicRange,
+      "dynamic range"
+    ),
+    truePeak: requiredMetric(vocal.peak_db ?? vocal.truePeak, "true peak"),
+    gainRide: [],
+    ...(centroidHz != null ? { spectralCentroid: centroidHz } : {}),
+  };
+}
+
+function buildDeterministicReview(
+  rawMetrics: AudioMetrics,
+  processedMetrics: LevelMetrics,
+  daw: string
+): Omit<LevelLabResponse, "processedMetrics"> {
+  const loudnessDistance = Math.abs(processedMetrics.lufs - -14);
+  const dynamicsDistance = Math.abs(processedMetrics.dynamicRange - 6);
+  const peakPenalty = processedMetrics.truePeak > -1 ? 18 : 0;
+  const sessionScore = Math.round(
+    Math.max(0, Math.min(100, 92 - loudnessDistance * 4 - dynamicsDistance * 5 - peakPenalty))
+  );
+
+  return {
+    sessionScore,
+    loudnessVerdict:
+      Math.abs(processedMetrics.lufs - rawMetrics.lufs) < 0.5
+        ? "Loudness barely changed"
+        : processedMetrics.lufs > -10
+          ? "Processed vocal is too loud"
+          : processedMetrics.lufs < -22
+            ? "Processed vocal is still quiet"
+            : "Loudness is controlled",
+    dynamicsVerdict:
+      processedMetrics.dynamicRange > 10
+        ? "Dynamics still move too much"
+        : processedMetrics.dynamicRange < 3
+          ? "Dynamics are over-compressed"
+          : "Dynamics sit in range",
+    brightnessVerdict:
+      processedMetrics.truePeak > -1
+        ? "True peak needs headroom"
+        : "True peak is controlled",
+    gainRideCallout:
+      processedMetrics.truePeak > -1
+        ? "The export is close to clipping at the loudest point."
+        : "Peak level leaves usable headroom.",
+    nextStep:
+      processedMetrics.truePeak > -1
+        ? `Lower the vocal trim in ${daw}.`
+        : `Level-match the printed vocal in ${daw}.`,
+  };
+}
+
+async function analyzeAudio(file: File): Promise<LevelMetrics> {
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
   if (!serviceUrl) {
     throw new Error("AUDIO_SERVICE_URL is not configured");
@@ -163,7 +252,7 @@ async function analyzeAudio(file: File): Promise<AudioMetrics> {
     throw new Error(`Audio service returned ${res.status}: ${await res.text()}`);
   }
 
-  return (await res.json()) as AudioMetrics;
+  return normalizeServiceMetrics(await res.json());
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -210,27 +299,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    /* Call Python audio analysis service */
-    let processedMetrics: AudioMetrics;
+    let processedMetrics: LevelMetrics;
     try {
       processedMetrics = await analyzeAudio(processedFile);
     } catch (err) {
       console.error("[level-lab] Audio service error:", err);
-      // Dummy data for testing if Python server is not running or fails
-      processedMetrics = {
-        lufs: rawMetrics.lufs + 3,
-        dynamicRange: Math.max(2, rawMetrics.dynamicRange - 4),
-        spectralCentroid: rawMetrics.spectralCentroid + 1200,
-        lowEndEnergy: Math.max(0, rawMetrics.lowEndEnergy - 0.2),
-        stereoWidth: rawMetrics.stereoWidth,
-        reverbEstimate: rawMetrics.reverbEstimate,
-      };
-      console.log("Using mock processed metrics due to audio service failure.");
+      return NextResponse.json({
+        status: "client_only",
+        message: "Using browser analysis",
+      });
     }
 
-    /* Build prompt and call Claude */
     const prompt = buildPrompt(rawMetrics, processedMetrics, daw, eraId);
-    const result = await callClaudeWithRetry(prompt);
+    const result = await callClaudeWithRetry(
+      prompt,
+      buildDeterministicReview(rawMetrics, processedMetrics, daw)
+    );
 
     const response: LevelLabResponse = {
       ...result,

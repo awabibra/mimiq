@@ -171,11 +171,16 @@
   position: relative;
   display: grid;
   flex: 1;
-  grid-template-columns: 1fr 700px;
+  grid-template-columns: minmax(360px, 1fr) minmax(640px, 700px);
   grid-template-rows: auto 1fr;
   height: 100vh;
-  overflow-y: auto;
+  overflow-y: hidden;
   overflow-x: hidden;
+}
+
+.sandboxContentResults {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
 }
 
 /* ── Center panel ── */
@@ -190,6 +195,38 @@
   justify-content: flex-start;
   padding: 8vh 32px 40px 32px;
   gap: 24px;
+}
+
+.centerToolDock {
+  position: absolute;
+  left: auto;
+  right: 24px;
+  bottom: 24px;
+  z-index: 8;
+  width: 292px;
+  min-width: 0;
+  align-items: stretch;
+  padding: 14px;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(8, 8, 8, 0.76);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.editDimmed {
+  opacity: 0.5;
+  filter: blur(0px);
+  transition:
+    opacity 300ms ease,
+    filter 300ms ease;
 }
 
 /* ── Upload zone (empty state) ── */
@@ -403,32 +440,48 @@
 .xyContainer {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+  width: 320px;
+  max-width: 100%;
+}
+
+.centerToolDock .xyContainer {
   width: 100%;
-  max-width: 480px;
 }
 
 .xyMiddleRow {
   display: flex;
-  gap: 16px;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Horizontal Slider Wrapper */
 .sliderTopWrapper {
-  width: 100%;
-  height: 24px;
+  width: 280px;
+  height: 16px;
   display: flex;
   align-items: center;
-  padding-left: 40px; /* Aligns with the pad */
+  margin-left: 40px;
+}
+
+.centerToolDock .sliderTopWrapper {
+  width: 224px;
+  margin-left: 34px;
 }
 
 /* Vertical Slider Wrapper */
 .sliderLeftWrapper {
   width: 24px;
-  height: 320px; /* Same as xyPad height */
+  height: 280px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.centerToolDock .sliderLeftWrapper {
+  width: 20px;
+  height: 224px;
 }
 
 /* Sleek Minimal Apple Slider */
@@ -451,18 +504,23 @@
 }
 
 .sliderVertical {
-  width: 320px; /* Same as xyPad height */
-  min-width: 320px;
+  width: 280px;
+  min-width: 280px;
   flex-shrink: 0;
   transform: rotate(-90deg);
+}
+
+.centerToolDock .sliderVertical {
+  width: 224px;
+  min-width: 224px;
 }
 
 .sleekSlider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 6px;
-  height: 16px;
-  border-radius: 3px;
+  height: 14px;
+  border-radius: 4px;
   background: color-mix(in srgb, var(--accent) 90%, white 10%);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
   transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.2s cubic-bezier(0.25, 1, 0.5, 1);
@@ -484,9 +542,9 @@
 /* ── XY Pad (results state) ── */
 .xyPad {
   position: relative;
-  width: 100%;
-  max-width: 480px;
-  height: 320px;
+  width: 280px;
+  min-width: 280px;
+  height: 280px;
   background-color: var(--bg-surface);
   border-radius: var(--radius-card);
   border: 0.5px solid color-mix(in srgb, var(--accent) 20%, var(--border-default));
@@ -497,14 +555,23 @@
   transition: box-shadow var(--transition), border-color var(--transition);
 }
 
+.centerToolDock .xyPad {
+  width: 224px;
+  min-width: 224px;
+  height: 224px;
+  box-shadow:
+    0 0 42px color-mix(in srgb, var(--accent) 8%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
 .xyPad:hover {
-  box-shadow: 0 0 140px color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: 0 0 84px color-mix(in srgb, var(--accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border-default));
 }
 
 .xyAxisLabel {
   position: absolute;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-tertiary);
   user-select: none;
   pointer-events: none;
@@ -536,8 +603,8 @@
 
 .xyCursor {
   position: absolute;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--accent);
   transform: translate(-50%, -50%);
@@ -552,7 +619,7 @@
   display: flex;
   justify-content: center;
   width: 100%;
-  margin-top: 24px;
+  margin-top: 2px;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-10px);
@@ -566,12 +633,14 @@
 }
 
 .generateButton {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  width: 100%;
+  height: 36px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
   border: 0.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--text-primary);
-  padding: 12px 32px;
-  border-radius: 30px;
-  font-size: 13px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   letter-spacing: 0.02em;
@@ -596,14 +665,30 @@
   pointer-events: none;
 }
 
+.generateHint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 30px;
+  color: color-mix(in srgb, var(--accent) 58%, rgba(255, 255, 255, 0.34));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.72;
+}
+
 .insightStrip {
   display: flex;
-  gap: 32px;
+  gap: 14px;
   width: 100%;
-  max-width: 440px; /* matches xyPad width */
-  margin-top: 16px;
+  max-width: none;
+  margin-top: 0;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
   justify-content: space-between;
-  margin-left: 40px; /* accounts for slider width + gap */
+  margin-left: 0;
+  border-bottom: 0.5px solid var(--border-default);
 }
 
 .insightCard {
@@ -652,21 +737,27 @@
 .right {
   grid-column: 2;
   grid-row: 1;
-  width: 700px;
-  min-width: 700px;
+  width: 100%;
+  min-width: 640px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 24px 32px;
   border-left: 0.5px solid var(--border-default);
   background-color: var(--bg-secondary);
+  overflow: hidden;
+  z-index: 2;
 }
 
-.chainOverlay {
-  grid-column: 1 / -1;
-  grid-row: 1 / -1;
-  position: relative;
-  pointer-events: none; /* Let clicks pass to center/right */
-  z-index: 10;
+.sandboxContentResults .right {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  padding: 24px 30px 24px 24px;
+  border-left: none;
+  background:
+    radial-gradient(circle at calc(100% - 170px) calc(100% - 170px), color-mix(in srgb, var(--accent) 5%, transparent), transparent 28%),
+    var(--bg-secondary);
 }
 
 /* ── Right panel — empty/exploring state ── */
@@ -699,6 +790,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   margin-bottom: 20px;
 }
 
@@ -722,6 +814,78 @@
   background: transparent;
   transition: color var(--transition);
   cursor: default;
+}
+
+.chainMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.editingBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, rgba(5, 5, 5, 0.72));
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0 10px;
+  animation: editingBadgePulse 1500ms ease-in-out infinite;
+}
+
+@keyframes editingBadgePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+}
+
+.saveChainButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  padding: 0 12px;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    transform var(--transition);
+}
+
+.saveChainButton {
+  border: 1px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--accent);
+}
+
+.saveChainButton:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.saveChainButton:active {
+  transform: scale(0.97);
+}
+
+.saveChainButton:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
 }
 
 /* ── Chain steps (moved to VisualVocalChain.module.css) ── */
@@ -754,14 +918,14 @@
 .btnSave {
   border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
   color: var(--accent);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 15%, transparent), 
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 15%, transparent),
               inset 0 0 10px color-mix(in srgb, var(--accent) 5%, transparent);
   background: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 
 .btnSave:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 30%, transparent), 
+  box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 30%, transparent),
               inset 0 0 15px color-mix(in srgb, var(--accent) 15%, transparent);
   transform: translateY(-1px);
   border-color: var(--accent);
@@ -915,6 +1079,120 @@
   border-bottom: 0.5px solid var(--border-default);
 }
 
+@media (max-width: 1280px) {
+  .sandboxContent {
+    grid-template-columns: minmax(320px, 1fr) minmax(520px, 620px);
+  }
+
+  .sandboxContentResults {
+    grid-template-columns: 1fr;
+  }
+
+  .right {
+    min-width: 520px;
+    padding: 22px 24px;
+  }
+
+  .sandboxContentResults .right {
+    min-width: 0;
+    padding: 22px 24px;
+  }
+
+  .centerToolDock {
+    left: auto;
+    right: 18px;
+    bottom: 18px;
+    width: 252px;
+    padding: 12px;
+  }
+
+  .centerToolDock .sliderTopWrapper {
+    width: 188px;
+    margin-left: 30px;
+  }
+
+  .centerToolDock .sliderLeftWrapper {
+    height: 188px;
+  }
+
+  .centerToolDock .sliderVertical {
+    width: 188px;
+    min-width: 188px;
+  }
+
+  .centerToolDock .xyPad {
+    width: 188px;
+    min-width: 188px;
+    height: 188px;
+  }
+}
+
+@media (max-width: 900px) {
+  .sandboxContent {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(520px, 1fr);
+    overflow-y: auto;
+  }
+
+  .sandboxContentResults {
+    grid-template-rows: 1fr;
+    overflow: hidden;
+  }
+
+  .center {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 28px 18px;
+  }
+
+  .centerToolDock {
+    position: absolute;
+    left: auto;
+    right: 14px;
+    bottom: 80px;
+    width: 252px;
+    max-width: calc(100% - 28px);
+    padding: 12px;
+  }
+
+  .centerToolDock .sliderTopWrapper {
+    width: 188px;
+    margin-left: 30px;
+  }
+
+  .centerToolDock .sliderLeftWrapper {
+    height: 188px;
+  }
+
+  .centerToolDock .sliderVertical {
+    width: 188px;
+    min-width: 188px;
+  }
+
+  .centerToolDock .xyPad {
+    width: 188px;
+    min-width: 188px;
+    height: 188px;
+  }
+
+  .right {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    min-height: 520px;
+    border-left: none;
+    border-top: 0.5px solid var(--border-default);
+    padding: 20px 18px 84px;
+  }
+
+  .sandboxContentResults .right {
+    grid-row: 1;
+    min-height: 0;
+    padding: 18px 16px;
+  }
+}
+
 /* ════════════════════════════════════════════
    MOBILE RESPONSIVE — below 768px
    ════════════════════════════════════════════ */
@@ -931,6 +1209,11 @@
     padding-bottom: 32px;
   }
 
+  .centerToolDock {
+    height: auto;
+    padding: 12px;
+  }
+
   .right {
     width: 100%;
     min-width: unset;
@@ -941,12 +1224,22 @@
     padding-bottom: 80px; /* room for tab bar */
   }
 
+  .sandboxContentResults .right {
+    padding: 16px 14px;
+  }
+
+  .centerToolDock .xyPad {
+    width: 188px;
+    min-width: 188px;
+    height: 188px;
+  }
+
   .xyPad {
-    height: 240px;
+    width: 280px;
+    height: 280px;
   }
 
   .insightStrip {
-    flex-direction: column;
     gap: 8px;
   }
 }

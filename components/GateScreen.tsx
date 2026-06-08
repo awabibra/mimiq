@@ -14,9 +14,12 @@ export default function GateScreen({ children }: { children: React.ReactNode }) 
   const isAnalyzed = useAudioStore((state) => (isHydrated ? state.isAnalyzed : false));
 
   useEffect(() => {
-    setIsHydrated(true);
-    // Trigger mount animation slightly after render for the fade-in effect
-    requestAnimationFrame(() => setMounted(true));
+    const frame = requestAnimationFrame(() => {
+      setIsHydrated(true);
+      setMounted(true);
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   const handleGoToSandbox = () => {

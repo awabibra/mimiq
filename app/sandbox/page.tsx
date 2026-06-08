@@ -10,6 +10,7 @@ import {
   type DragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type { User } from "@supabase/supabase-js";
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
@@ -19,12 +20,31 @@ import type {
   ChainStep,
   AnalysisResponse,
   AnalysisError,
+  EvaluationResult,
 } from "@/lib/types";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AnimatedGrid } from "@/components/AnimatedGrid";
+import { AuthModal } from "@/components/AuthModal";
+import { ProjectGate } from "@/components/ProjectGate";
 import { useStore } from "@/lib/store";
+import { useAuth } from "@/lib/useAuth";
 import { useAudioStore } from "@/lib/useAudioStore";
+import {
+  createProjectRecord,
+  downloadProjectAudio,
+  saveProjectPatch,
+  uploadProjectAudio,
+} from "@/lib/projects";
+import {
+  getCurrentVocal,
+  getLatestGeneratedChain,
+  isGeneratedChain,
+  isLocalProject,
+  useProject,
+} from "@/lib/useProject";
+import { supabase } from "@/lib/supabase";
+import type { GeneratedChain, ProjectPatch, VocalVersion } from "@/lib/types";
 import { VisualVocalChain } from "./VisualVocalChain";
 import styles from "./page.module.css";
 
@@ -33,6 +53,17 @@ import styles from "./page.module.css";
    ═══════════════════════════════════════════════════════════════ */
 
 type AppState = "empty" | "analyzing" | "results";
+type SandboxMode = "view" | "edit";
+type VocalChain = ChainStep[];
+
+type EditState = {
+  mode: SandboxMode;
+  editedChain: VocalChain | null;
+  isDirty: boolean;
+  evaluationResult: EvaluationResult | null;
+  feedbackPanelOpen: boolean;
+  evaluating: boolean;
+};
 
 interface AudioInsights {
   loudness: string;
@@ -40,7 +71,17 @@ interface AudioInsights {
   brightness: string;
 }
 
+const initialEditState: EditState = {
+  mode: "view",
+  editedChain: null,
+  isDirty: false,
+  evaluationResult: null,
+  feedbackPanelOpen: false,
+  evaluating: false,
+};
+
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+const SAVE_AFTER_AUTH_KEY = "mimiq-save-chain-after-auth";
 
 /* ═══════════════════════════════════════════════════════════════
    Analysis steps labels (cosmetic — fill the wait)
@@ -106,6 +147,7 @@ async function callAnalyze(params: {
   xyX?: number;
   xyY?: number;
   cachedMetrics?: AudioMetrics;
+  clientMetrics?: Partial<AudioMetrics>;
 }): Promise<AnalysisResponse> {
   const form = new FormData();
   form.append("daw", params.daw);
@@ -118,7 +160,16 @@ async function callAnalyze(params: {
   if (params.cachedMetrics)
     form.append("cachedMetrics", JSON.stringify(params.cachedMetrics));
 
-  const res = await fetch("/api/analyze", { method: "POST", body: form });
+  const headers: HeadersInit = {};
+  if (params.clientMetrics) {
+    headers["x-client-audio-metrics"] = JSON.stringify(params.clientMetrics);
+  }
+
+  const res = await fetch("/api/analyze", {
+    method: "POST",
+    body: form,
+    headers,
+  });
 
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as AnalysisError;
@@ -128,17 +179,235 @@ async function callAnalyze(params: {
   return (await res.json()) as AnalysisResponse;
 }
 
+async function callEvaluateChain(params: {
+  chain: ChainStep[];
+  metrics: AudioMetrics;
+  genre: string;
+  daw: string;
+  iteration: number;
+}): Promise<EvaluationResult> {
+  const res = await fetch("/api/evaluate-chain", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    throw new Error("Chain evaluation failed.");
+  }
+
+  return (await res.json()) as EvaluationResult;
+}
+
+function cloneChain(chain: ChainStep[]): ChainStep[] {
+  if (typeof structuredClone === "function") {
+    return structuredClone(chain);
+  }
+
+  return JSON.parse(JSON.stringify(chain)) as ChainStep[];
+}
+
+async function computeClientMetrics(file: File): Promise<Partial<AudioMetrics>> {
+  const AudioCtx =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+
+  if (!AudioCtx) {
+    throw new Error("Web Audio API is unavailable.");
+  }
+
+  const ctx = new AudioCtx();
+  try {
+    const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+    const data = buffer.getChannelData(0);
+    const energy = data.reduce((sum, s) => sum + s * s, 0);
+    const rms = Math.sqrt(energy / data.length);
+    const safeRms = Math.max(rms, 1e-8);
+
+    const lufs = 20 * Math.log10(safeRms) - 0.691;
+    const peak = data.reduce((max, s) => Math.max(max, Math.abs(s)), 0);
+    const peakDb = 20 * Math.log10(Math.max(peak, 1e-8));
+    const dynamicRange = peakDb - 20 * Math.log10(safeRms);
+
+    return {
+      lufs: Math.max(-40, lufs),
+      dynamicRange: Math.min(20, dynamicRange),
+    };
+  } finally {
+    await ctx.close().catch(() => undefined);
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Format helpers
    ═══════════════════════════════════════════════════════════════ */
 
 function formatInsights(m: AudioMetrics): AudioInsights {
+  const centroidKhz =
+    m.spectralCentroid > 100
+      ? m.spectralCentroid / 1000
+      : m.spectralCentroid;
+
   return {
     loudness: `${m.lufs.toFixed(1)} LUFS`,
     dynamicRange: `${m.dynamicRange.toFixed(1)} dB`,
-    brightness: `${m.spectralCentroid.toFixed(1)} kHz`,
+    brightness: `${centroidKhz.toFixed(1)} kHz`,
   };
 }
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+const formatSignedDb = (value: number) =>
+  `${value > 0 ? "+" : ""}${Number.isInteger(value) ? value : value.toFixed(1)}`;
+
+const replaceOrAppend = (
+  action: string,
+  pattern: RegExp,
+  replacement: string
+) => (pattern.test(action) ? action.replace(pattern, replacement) : `${action}, ${replacement}`);
+
+function scaleChainForXY(chain: ChainStep[], x: number, y: number) {
+  const reverbMix = Math.round(clamp(x, 0, 1) * 30);
+  const delayMix = Math.round(clamp(x, 0, 1) * 20);
+  const airGain = Math.round((-4 + clamp(y, 0, 1) * 8) * 10) / 10;
+  const deEssFrequency = Math.round(5000 + clamp(y, 0, 1) * 3000);
+
+  return chain.map((step) => {
+    const text = `${step.action} ${step.reason}`.toLowerCase();
+    let action = step.action;
+
+    if (text.includes("reverb")) {
+      action = replaceOrAppend(action, /mix\s*[+\-−]?\d+(?:\.\d+)?%/i, `mix ${reverbMix}%`);
+    } else if (
+      text.includes("delay") ||
+      text.includes("echo")
+    ) {
+      action = replaceOrAppend(action, /mix\s*[+\-−]?\d+(?:\.\d+)?%/i, `mix ${delayMix}%`);
+    } else if (
+      text.includes("de-esser") ||
+      text.includes("deesser") ||
+      text.includes("sibilance")
+    ) {
+      const targetPattern = /(target\s+)[+\-−]?\d+(?:\.\d+)?\s*(?:khz|hz)/i;
+      action = targetPattern.test(action)
+        ? action.replace(targetPattern, (_match, prefix: string) => `${prefix}${deEssFrequency} Hz`)
+        : `${action}, Target ${deEssFrequency} Hz`;
+    } else if (
+      text.includes("air eq") ||
+      text.includes("air ") ||
+      text.includes("high shelf")
+    ) {
+      action = replaceOrAppend(
+        action,
+        /\b(gain|boost)\s*[+\-−]?\d+(?:\.\d+)?\s*dB/i,
+        `$1 ${formatSignedDb(airGain)} dB`
+      );
+    }
+
+    return action === step.action ? step : { ...step, action };
+  });
+}
+
+function getExploreMetrics(eraId: string): AudioMetrics {
+  const defaults: Record<string, AudioMetrics> = {
+    nocturnal: {
+      lufs: -18,
+      dynamicRange: 8,
+      spectralCentroid: 1800,
+      reverbDecay: 0.5,
+      sibilancePeak: -14,
+      pitchVariance: 0.45,
+      breathNoise: -46,
+      dynamicInconsistency: 0.32,
+      lowEndEnergy: 0.32,
+      stereoWidth: 0.2,
+      reverbEstimate: 0.24,
+    },
+    volatile: {
+      lufs: -15,
+      dynamicRange: 6,
+      spectralCentroid: 2600,
+      reverbDecay: 0.22,
+      sibilancePeak: -11,
+      pitchVariance: 0.58,
+      breathNoise: -43,
+      dynamicInconsistency: 0.42,
+      lowEndEnergy: 0.42,
+      stereoWidth: 0.16,
+      reverbEstimate: 0.12,
+    },
+    current: {
+      lufs: -16,
+      dynamicRange: 7,
+      spectralCentroid: 2300,
+      reverbDecay: 0.38,
+      sibilancePeak: -12,
+      pitchVariance: 0.52,
+      breathNoise: -45,
+      dynamicInconsistency: 0.34,
+      lowEndEnergy: 0.34,
+      stereoWidth: 0.24,
+      reverbEstimate: 0.18,
+    },
+    golden: {
+      lufs: -17,
+      dynamicRange: 9,
+      spectralCentroid: 1900,
+      reverbDecay: 0.24,
+      sibilancePeak: -15,
+      pitchVariance: 0.42,
+      breathNoise: -48,
+      dynamicInconsistency: 0.28,
+      lowEndEnergy: 0.3,
+      stereoWidth: 0.1,
+      reverbEstimate: 0.1,
+    },
+    crystalline: {
+      lufs: -16,
+      dynamicRange: 6.5,
+      spectralCentroid: 3000,
+      reverbDecay: 0.28,
+      sibilancePeak: -10,
+      pitchVariance: 0.5,
+      breathNoise: -44,
+      dynamicInconsistency: 0.36,
+      lowEndEnergy: 0.24,
+      stereoWidth: 0.14,
+      reverbEstimate: 0.09,
+    },
+    foryou: {
+      lufs: -15,
+      dynamicRange: 6,
+      spectralCentroid: 2200,
+      reverbDecay: 0.32,
+      sibilancePeak: -12,
+      pitchVariance: 0.46,
+      breathNoise: -46,
+      dynamicInconsistency: 0.3,
+      lowEndEnergy: 0.28,
+      stereoWidth: 0.18,
+      reverbEstimate: 0.14,
+    },
+  };
+
+  const aliases: Record<string, string> = {
+    rnb: "nocturnal",
+    trap: "volatile",
+    foryou: "foryou",
+  };
+
+  return defaults[eraId] ?? defaults[aliases[eraId]] ?? defaults.golden;
+}
+
+const newClientId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}`;
+};
 
 /* ═══════════════════════════════════════════════════════════════
    Transition Overlay Component
@@ -186,6 +455,10 @@ export default function SandboxPage() {
   /* Zustand Store */
   const { daw, mic, plugins, era: storeEra, setEra } = useStore();
   const setSession = useAudioStore((state) => state.setSession);
+  const user = useAuth((state) => state.user);
+  const project = useProject((state) => state.project);
+  const setActiveProject = useProject((state) => state.setActiveProject);
+  const updateProject = useProject((state) => state.updateProject);
 
   /* Core state */
   const [appState, setAppState] = useState<AppState>("empty");
@@ -198,7 +471,8 @@ export default function SandboxPage() {
     if (storeEra) {
       const era = eras.find((e) => e.id === storeEra);
       if (era && era.id !== activeEra.id) {
-        setActiveEra(era);
+        const frame = requestAnimationFrame(() => setActiveEra(era));
+        return () => cancelAnimationFrame(frame);
       }
     }
   }, [storeEra, activeEra.id]);
@@ -214,47 +488,72 @@ export default function SandboxPage() {
     const fromOnboarding = sessionStorage.getItem("mimiq-from-onboarding");
     if (fromOnboarding) {
       sessionStorage.removeItem("mimiq-from-onboarding"); // consume — fires once only
-      setShowCinematic(true);
+      const frame = requestAnimationFrame(() => setShowCinematic(true));
+      return () => cancelAnimationFrame(frame);
     }
   }, []);
 
   /* Hydration guard to prevent FOUC of the default era */
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    setMounted(true);
+    const frame = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   /* Real data from API */
   const [chain, setChain] = useState<ChainStep[]>([]);
-  const [summary, setSummary] = useState("");
+  const [engineerNote, setEngineerNote] = useState<string | null>(null);
   const [insights, setInsights] = useState<AudioInsights | null>(null);
   const [cachedMetrics, setCachedMetrics] = useState<AudioMetrics | null>(null);
+  const [activeGeneratedChainId, setActiveGeneratedChainId] = useState<string | null>(null);
+  const [editState, setEditState] = useState<EditState>(initialEditState);
+  const [hasUnsavedEdit, setHasUnsavedEdit] = useState(false);
+  const [evaluationIteration, setEvaluationIteration] = useState(0);
+  const [chainValidated, setChainValidated] = useState(false);
 
   /* Error states */
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
-  /* Save chain */
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showSignUpPrompt, setShowSignUpPrompt] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
 
   /* XY cursor position (normalised 0-1) */
   const [cursorX, setCursorX] = useState(0.55);
   const [cursorY, setCursorY] = useState(0.62);
 
-  /* The position that is currently applied to the generated chain */
-  const [appliedX, setAppliedX] = useState(0.55);
-  const [appliedY, setAppliedY] = useState(0.62);
+  /* Whether the cursor has moved since the last full chain generation */
+  const [hasPendingGenerate, setHasPendingGenerate] = useState(false);
 
   const vocalInputRef = useRef<HTMLInputElement>(null);
   const beatInputRef = useRef<HTMLInputElement>(null);
   const padRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveChainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chainRef = useRef<ChainStep[]>([]);
+  const cursorRef = useRef({ x: 0.55, y: 0.62 });
 
   /* ── Era switching updates CSS variable ── */
   useIsomorphicLayoutEffect(() => {
     document.documentElement.style.setProperty("--accent", activeEra.accent);
   }, [activeEra]);
+
+  useEffect(() => {
+    chainRef.current = chain;
+  }, [chain]);
+
+  useEffect(() => {
+    cursorRef.current = { x: cursorX, y: cursorY };
+  }, [cursorX, cursorY]);
+
+  useEffect(
+    () => () => {
+      if (liveChainTimerRef.current) {
+        clearTimeout(liveChainTimerRef.current);
+      }
+    },
+    []
+  );
 
   /* ── Auto-dismiss error banner after 8s ── */
   const showBanner = useCallback((msg: string) => {
@@ -262,6 +561,537 @@ export default function SandboxPage() {
     if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
     bannerTimerRef.current = setTimeout(() => setErrorBanner(null), 8000);
   }, []);
+
+  const saveUserPrefs = useCallback(
+    async (authedUser: User) => {
+      try {
+        await supabase.from("users").upsert({
+          id: authedUser.id,
+          daw: daw || "Logic Pro",
+          genres: [activeEra.id],
+        });
+      } catch {
+        // Preferences should never block saving the chain.
+      }
+    },
+    [activeEra.id, daw]
+  );
+
+  const saveCurrentProject = useCallback(
+    async (authedUser: User) => {
+      if (!project || saveBusy) return;
+
+      setSaveBusy(true);
+
+      try {
+        await saveUserPrefs(authedUser);
+
+        const remoteProject = isLocalProject(project)
+          ? await createProjectRecord(project.name, authedUser.id)
+          : project;
+
+        let patch: ProjectPatch = {
+          beat_file_url: project.beat_file_url,
+          beat_filename: project.beat_filename,
+          vocal_versions: project.vocal_versions,
+          current_vocal_index: project.current_vocal_index,
+          generated_chains: project.generated_chains,
+          mix_room_report: project.mix_room_report,
+          level_lab_report: project.level_lab_report,
+          stem_split_url: project.stem_split_url,
+          last_opened_at: new Date().toISOString(),
+        };
+
+        if (beatFile) {
+          const beatPath = await uploadProjectAudio({
+            userId: authedUser.id,
+            projectId: remoteProject.id,
+            kind: "beat",
+            file: beatFile,
+          });
+
+          patch = {
+            ...patch,
+            beat_file_url: beatPath,
+            beat_filename: beatFile.name,
+          };
+        }
+
+        if (vocalFile) {
+          const vocalPath = await uploadProjectAudio({
+            userId: authedUser.id,
+            projectId: remoteProject.id,
+            kind: "vocal",
+            file: vocalFile,
+          });
+          const vocalVersion: VocalVersion = {
+            id: newClientId(),
+            filename: vocalFile.name,
+            url: vocalPath,
+            uploaded_at: new Date().toISOString(),
+            label: `Vocal ${project.vocal_versions.length + 1}`,
+          };
+          const vocal_versions = [...project.vocal_versions, vocalVersion];
+
+          patch = {
+            ...patch,
+            vocal_versions,
+            current_vocal_index: vocal_versions.length - 1,
+          };
+        }
+
+        const saved = await saveProjectPatch(remoteProject.id, patch);
+        setActiveProject(saved);
+        setShowSignUpPrompt(false);
+        showBanner("Chain saved.");
+      } catch {
+        showBanner("MimiQ could not save this chain yet. Try again.");
+        throw new Error("Save failed");
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      beatFile,
+      project,
+      saveBusy,
+      saveUserPrefs,
+      setActiveProject,
+      showBanner,
+      vocalFile,
+    ]
+  );
+
+  const handleSaveChain = useCallback(async () => {
+    if (!project || chain.length === 0 || saveBusy) return;
+
+    if (!user) {
+      setShowSignUpPrompt(true);
+      return;
+    }
+
+    try {
+      await saveCurrentProject(user);
+    } catch {
+      // saveCurrentProject already raised the visible banner.
+    }
+  }, [chain.length, project, saveBusy, saveCurrentProject, user]);
+
+  const handleAuthedForSave = useCallback(
+    async (authedUser: User) => {
+      await saveCurrentProject(authedUser);
+    },
+    [saveCurrentProject]
+  );
+
+  useEffect(() => {
+    if (!user || !project) return;
+
+    const shouldSave = sessionStorage.getItem(SAVE_AFTER_AUTH_KEY) === "1";
+    if (!shouldSave) return;
+
+    sessionStorage.removeItem(SAVE_AFTER_AUTH_KEY);
+    const frame = requestAnimationFrame(() => {
+      void saveCurrentProject(user).catch(() => undefined);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [project, saveCurrentProject, user]);
+
+  useEffect(() => {
+    if (!project) return;
+
+    const currentVocal = getCurrentVocal(project);
+    const latestChain = getLatestGeneratedChain(project);
+    const chainData = latestChain?.chain_data;
+    const xyPosition = chainData?.xyPosition ?? { x: 0.55, y: 0.62 };
+    const frame = requestAnimationFrame(() => {
+      setVocalFile(null);
+      setBeatFile(null);
+      setUploadError(null);
+
+      if (latestChain && chainData?.chain?.length && chainData.measurements) {
+        setChain(chainData.chain);
+        setEngineerNote(chainData.engineer_note ?? null);
+        setInsights(formatInsights(chainData.measurements));
+        setCachedMetrics(chainData.measurements);
+        setActiveGeneratedChainId(latestChain.id);
+        setChainValidated(Boolean(chainData.validated));
+        setEditState(initialEditState);
+        setHasUnsavedEdit(false);
+        setEvaluationIteration(chainData.iteration_count ?? 0);
+        setCursorX(xyPosition.x);
+        setCursorY(xyPosition.y);
+        setHasPendingGenerate(false);
+        setAppState("results");
+        setSession({
+          isAnalyzed: true,
+          vocalFileUrl: currentVocal?.url ?? null,
+          beatFileUrl: project.beat_file_url,
+          analysisResult: {
+            chain: chainData.chain,
+            summary: chainData.summary,
+            metrics: chainData.measurements,
+            xyPosition,
+            engineer_note: chainData.engineer_note,
+          },
+        });
+        return;
+      }
+
+      if (currentVocal) {
+        setChain([]);
+        setEngineerNote(null);
+        setInsights(null);
+        setCachedMetrics(null);
+        setActiveGeneratedChainId(null);
+        setChainValidated(false);
+        setEditState(initialEditState);
+        setHasUnsavedEdit(false);
+        setEvaluationIteration(0);
+        setHasPendingGenerate(false);
+        setAppState("results");
+        setSession({
+          isAnalyzed: true,
+          vocalFileUrl: currentVocal.url,
+          beatFileUrl: project.beat_file_url,
+          analysisResult: null,
+        });
+        return;
+      }
+
+      setChain([]);
+      setEngineerNote(null);
+      setInsights(null);
+      setCachedMetrics(null);
+      setActiveGeneratedChainId(null);
+      setChainValidated(false);
+      setEditState(initialEditState);
+      setHasUnsavedEdit(false);
+      setEvaluationIteration(0);
+      setHasPendingGenerate(false);
+      setAppState("empty");
+      setSession({
+        isAnalyzed: false,
+        vocalFileUrl: null,
+        beatFileUrl: project.beat_file_url,
+        analysisResult: null,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [project, setSession]);
+
+  useEffect(() => {
+    if (!project || typeof window === "undefined") return;
+
+    const chainId = new URLSearchParams(window.location.search).get("chainId");
+    if (!chainId) return;
+
+    const selectedChain = project.generated_chains
+      .filter(isGeneratedChain)
+      .find((entry) => entry.id === chainId);
+    if (!selectedChain) return;
+
+    const chainData = selectedChain.chain_data;
+    const xyPosition = chainData.xyPosition ?? { x: 0.55, y: 0.62 };
+
+    const frame = requestAnimationFrame(() => {
+      setChain(chainData.chain);
+      setEngineerNote(chainData.engineer_note ?? null);
+      if (chainData.measurements) {
+        setInsights(formatInsights(chainData.measurements));
+        setCachedMetrics(chainData.measurements);
+      }
+      setActiveGeneratedChainId(selectedChain.id);
+      setChainValidated(Boolean(chainData.validated));
+      setEditState(initialEditState);
+      setHasUnsavedEdit(false);
+      setEvaluationIteration(chainData.iteration_count ?? 0);
+      setCursorX(xyPosition.x);
+      setCursorY(xyPosition.y);
+      setHasPendingGenerate(false);
+      setAppState("results");
+      setSession({
+        isAnalyzed: true,
+        analysisResult: chainData.measurements
+          ? {
+              chain: chainData.chain,
+              summary: chainData.summary,
+              engineer_note: chainData.engineer_note,
+              metrics: chainData.measurements,
+              xyPosition,
+            }
+          : null,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [project, setSession]);
+
+  const buildGeneratedChain = useCallback(
+    (
+      result: AnalysisResponse,
+      eraId: string,
+      xyX: number,
+      xyY: number
+    ): GeneratedChain => ({
+      id: newClientId(),
+      chain_data: {
+        chain: result.chain,
+        summary: result.summary,
+        engineer_note: result.engineer_note,
+        measurements: result.metrics,
+        xyPosition: result.xyPosition ?? { x: xyX, y: xyY },
+      },
+      genre: eraId,
+      daw: daw || "Logic Pro",
+      created_at: new Date().toISOString(),
+      sandbox_settings: {
+        era: eraId,
+        mic,
+        plugins,
+        xyPosition: { x: xyX, y: xyY },
+      },
+    }),
+    [daw, mic, plugins]
+  );
+
+  const persistProjectPatch = useCallback(
+    async (patch: ProjectPatch) => {
+      if (!project) return;
+
+      updateProject(patch);
+
+      if (!user || isLocalProject(project)) {
+        return;
+      }
+
+      try {
+        const saved = await saveProjectPatch(project.id, patch);
+        setActiveProject(saved);
+      } catch {
+        showBanner("Project updated locally, but Supabase did not save it yet.");
+      }
+    },
+    [project, setActiveProject, showBanner, updateProject, user]
+  );
+
+  const persistGeneratedResult = useCallback(
+    async (
+      result: AnalysisResponse,
+      eraId: string,
+      xyX: number,
+      xyY: number
+    ) => {
+      if (!project) return;
+
+      const generated = buildGeneratedChain(result, eraId, xyX, xyY);
+      setActiveGeneratedChainId(generated.id);
+      setChainValidated(false);
+      setEvaluationIteration(0);
+      await persistProjectPatch({
+        generated_chains: [generated, ...project.generated_chains],
+      });
+    },
+    [buildGeneratedChain, persistProjectPatch, project]
+  );
+
+  const currentSavedValidation = useCallback(() => {
+    const saved = project?.generated_chains
+      .filter(isGeneratedChain)
+      .find((entry) => entry.id === activeGeneratedChainId);
+
+    return Boolean(saved?.chain_data.validated);
+  }, [activeGeneratedChainId, project]);
+
+  const handleEnterEditMode = useCallback(() => {
+    if (chain.length === 0) return;
+
+    setEditState({
+      mode: "edit",
+      editedChain: cloneChain(chain),
+      isDirty: false,
+      evaluationResult: null,
+      feedbackPanelOpen: false,
+      evaluating: false,
+    });
+    setHasUnsavedEdit(false);
+  }, [chain]);
+
+  const handleEditedChainChange = useCallback((nextChain: ChainStep[]) => {
+    setEditState((state) => {
+      if (state.mode !== "edit") return state;
+
+      return {
+        ...state,
+        editedChain: nextChain,
+        isDirty: true,
+      };
+    });
+    setHasUnsavedEdit(true);
+    setChainValidated(false);
+  }, []);
+
+  const closeEditMode = useCallback(() => {
+    setEditState(initialEditState);
+    setHasUnsavedEdit(false);
+  }, []);
+
+  const handleDiscardEdit = useCallback(() => {
+    setChainValidated(currentSavedValidation());
+    closeEditMode();
+  }, [closeEditMode, currentSavedValidation]);
+
+  const handleSaveEditedChain = useCallback(async () => {
+    const editedChain = editState.editedChain;
+    if (!editedChain) {
+      closeEditMode();
+      return;
+    }
+
+    const result = editState.evaluationResult;
+    const validated = result?.verdict === "professional";
+    const evaluationSummary =
+      result?.overall ?? "Saved without a professional validation pass.";
+    const iterationCount = Math.max(evaluationIteration, validated || result ? 1 : 0);
+    const validationTimestamp = new Date().toISOString();
+
+    setChain(editedChain);
+    setChainValidated(validated);
+
+    if (project && activeGeneratedChainId) {
+      let replaced = false;
+      const generated_chains = project.generated_chains.map((entry) => {
+        if (!isGeneratedChain(entry) || entry.id !== activeGeneratedChainId) {
+          return entry;
+        }
+
+        replaced = true;
+        return {
+          ...entry,
+          chain_data: {
+            ...entry.chain_data,
+            chain: editedChain,
+            validated,
+            validation_timestamp: validationTimestamp,
+            iteration_count: iterationCount,
+            evaluation_summary: evaluationSummary,
+          },
+        };
+      });
+
+      if (replaced) {
+        await persistProjectPatch({ generated_chains });
+      }
+    }
+
+    closeEditMode();
+    showBanner(validated ? "Chain validated and saved." : "Chain changes saved.");
+  }, [
+    activeGeneratedChainId,
+    closeEditMode,
+    editState.editedChain,
+    editState.evaluationResult,
+    evaluationIteration,
+    persistProjectPatch,
+    project,
+    showBanner,
+  ]);
+
+  const handleEvaluateChain = useCallback(async () => {
+    if (
+      editState.mode !== "edit" ||
+      !editState.editedChain ||
+      !editState.isDirty ||
+      editState.evaluating
+    ) {
+      return;
+    }
+
+    if (!cachedMetrics) {
+      showBanner("MimiQ needs vocal measurements before evaluating this chain.");
+      return;
+    }
+
+    const nextIteration = evaluationIteration + 1;
+    setEditState((state) => ({ ...state, evaluating: true }));
+
+    try {
+      const result = await callEvaluateChain({
+        chain: editState.editedChain,
+        metrics: cachedMetrics,
+        genre: activeEra.id,
+        daw: daw || "Logic Pro",
+        iteration: nextIteration,
+      });
+
+      setEvaluationIteration(nextIteration);
+      setChainValidated(result.verdict === "professional");
+      setEditState((state) => ({
+        ...state,
+        isDirty: false,
+        evaluating: false,
+        evaluationResult: result,
+        feedbackPanelOpen: true,
+      }));
+    } catch {
+      setEvaluationIteration(nextIteration);
+      setChainValidated(false);
+      setEditState((state) => ({
+        ...state,
+        isDirty: false,
+        evaluating: false,
+        evaluationResult: {
+          overall: "MimiQ could not complete the chain audit.",
+          issues: [
+            {
+              severity: "warning",
+              plugin: "chain",
+              problem: "The evaluation request did not complete.",
+              fix: "Make one chain edit and evaluate again.",
+              why: "A fresh edit gives the evaluator a clean request to inspect.",
+            },
+          ],
+          strengths: [],
+          verdict: "needs_work",
+          verdict_reason: "The chain was not validated by the evaluation engine.",
+        },
+        feedbackPanelOpen: true,
+      }));
+    }
+  }, [
+    activeEra.id,
+    cachedMetrics,
+    daw,
+    editState.editedChain,
+    editState.evaluating,
+    editState.isDirty,
+    editState.mode,
+    evaluationIteration,
+    showBanner,
+  ]);
+
+  const handleFeedbackPanelOpenChange = useCallback((open: boolean) => {
+    setEditState((state) => ({
+      ...state,
+      feedbackPanelOpen: open,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (editState.mode !== "edit") return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleDiscardEdit();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editState.mode, handleDiscardEdit]);
 
   /* ── Handle era change ── */
   const handleEraChange = useCallback(
@@ -281,7 +1111,9 @@ export default function SandboxPage() {
             cachedMetrics,
           });
           setChain(result.chain);
-          setSummary(result.summary);
+          setEngineerNote(result.engineer_note ?? null);
+          setHasPendingGenerate(false);
+          void persistGeneratedResult(result, era.id, cursorX, cursorY);
         } catch {
           showBanner("Failed to regenerate chain. Try again.");
         } finally {
@@ -289,36 +1121,19 @@ export default function SandboxPage() {
         }
       }
     },
-    [appState, cachedMetrics, cursorX, cursorY, showBanner, daw, mic, plugins]
+    [
+      appState,
+      cachedMetrics,
+      cursorX,
+      cursorY,
+      showBanner,
+      daw,
+      mic,
+      plugins,
+      persistGeneratedResult,
+      setEra,
+    ]
   );
-
-  /* ── Save chain ── */
-  const handleSaveChain = useCallback(async () => {
-    if (saveStatus !== 'idle' || chain.length === 0) return;
-    setSaveStatus('saving');
-    try {
-      await fetch('/api/chains', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: 'demo-user-001',
-          era: activeEra.id,
-          daw: daw || 'Logic Pro',
-          mic,
-          plugins,
-          xyPosition: { x: cursorX, y: cursorY },
-          chain,
-          summary,
-          measurements: cachedMetrics ?? {},
-          createdAt: new Date().toISOString(),
-        }),
-      });
-      setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch {
-      setSaveStatus('idle');
-    }
-  }, [saveStatus, chain, activeEra.id, cursorX, cursorY, summary, cachedMetrics, daw, mic, plugins]);
 
   /* ── File handling ── */
   const handleVocalSelect = useCallback(
@@ -337,31 +1152,90 @@ export default function SandboxPage() {
       );
 
       try {
+        let clientMetrics: Partial<AudioMetrics> | undefined;
+        try {
+          clientMetrics = await computeClientMetrics(file);
+        } catch (metricError) {
+          console.warn("[sandbox] Client-side metric calculation failed.", metricError);
+        }
+
+        let beatForAnalysis = beatFile;
+
+        if (!beatForAnalysis && project?.beat_file_url) {
+          beatForAnalysis = await downloadProjectAudio(
+            project.beat_file_url,
+            project.beat_filename ?? "project-beat.wav"
+          );
+        }
+
         const [result] = await Promise.all([
           callAnalyze({
             vocalFile: file,
-            beatFile,
+            beatFile: beatForAnalysis,
             daw: daw || "Logic Pro",
             mic,
             plugins,
             eraId: activeEra.id,
+            clientMetrics,
           }),
           minDelay,
         ]);
 
         setChain(result.chain);
-        setSummary(result.summary);
+        setEngineerNote(result.engineer_note ?? null);
         setInsights(formatInsights(result.metrics));
         setCachedMetrics(result.metrics);
         setCursorX(result.xyPosition.x);
         setCursorY(result.xyPosition.y);
-        setAppliedX(result.xyPosition.x);
-        setAppliedY(result.xyPosition.y);
-        
+        setHasPendingGenerate(false);
+
+        const localVocalUrl = URL.createObjectURL(file);
+        const localBeatUrl = beatFile
+          ? URL.createObjectURL(beatFile)
+          : project?.beat_file_url ?? null;
+        let storedVocalUrl = localVocalUrl;
+
+        if (project) {
+          try {
+            const generated = buildGeneratedChain(
+              result,
+              activeEra.id,
+              result.xyPosition.x,
+              result.xyPosition.y
+            );
+            const patch: ProjectPatch = {
+              generated_chains: [generated, ...project.generated_chains],
+            };
+
+            if (user && !isLocalProject(project)) {
+              storedVocalUrl = await uploadProjectAudio({
+                userId: user.id,
+                projectId: project.id,
+                kind: "vocal",
+                file,
+              });
+
+              const vocalVersion: VocalVersion = {
+                id: newClientId(),
+                filename: file.name,
+                url: storedVocalUrl,
+                uploaded_at: new Date().toISOString(),
+                label: `Vocal ${project.vocal_versions.length + 1}`,
+              };
+              patch.vocal_versions = [...project.vocal_versions, vocalVersion];
+              patch.current_vocal_index = project.vocal_versions.length;
+            }
+
+            await persistProjectPatch(patch);
+          } catch {
+            showBanner("Analysis finished, but the project file did not save yet.");
+          }
+        }
+
         setSession({
           isAnalyzed: true,
-          vocalFileUrl: file ? URL.createObjectURL(file) : null,
-          beatFileUrl: beatFile ? URL.createObjectURL(beatFile) : null,
+          vocalFileUrl: storedVocalUrl,
+          beatFileUrl: localBeatUrl,
           analysisResult: result,
         });
 
@@ -383,7 +1257,19 @@ export default function SandboxPage() {
         }
       }
     },
-    [beatFile, activeEra.id, showBanner, daw, mic, plugins]
+    [
+      beatFile,
+      project,
+      activeEra.id,
+      showBanner,
+      daw,
+      mic,
+      plugins,
+      buildGeneratedChain,
+      persistProjectPatch,
+      setSession,
+      user,
+    ]
   );
 
   const handleVocalInput = useCallback(
@@ -394,7 +1280,7 @@ export default function SandboxPage() {
     [handleVocalSelect]
   );
 
-  const handleBeatInput = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+  const handleBeatInput = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > MAX_FILE_SIZE) {
@@ -403,8 +1289,44 @@ export default function SandboxPage() {
       }
       setUploadError(null);
       setBeatFile(file);
+
+      if (project) {
+        try {
+          if (user && !isLocalProject(project)) {
+            const path = await uploadProjectAudio({
+              userId: user.id,
+              projectId: project.id,
+              kind: "beat",
+              file,
+            });
+
+            await persistProjectPatch({
+              beat_file_url: path,
+              beat_filename: file.name,
+            });
+
+            setSession({
+              beatFileUrl: path,
+            });
+            return;
+          }
+
+          const localBeatUrl = URL.createObjectURL(file);
+
+          await persistProjectPatch({
+            beat_file_url: null,
+            beat_filename: file.name,
+          });
+
+          setSession({
+            beatFileUrl: localBeatUrl,
+          });
+        } catch {
+          showBanner("Beat selected, but it did not save to the project yet.");
+        }
+      }
     }
-  }, []);
+  }, [persistProjectPatch, project, setSession, showBanner, user]);
 
   /* ── Drag and drop ── */
   const handleDragOver = useCallback((e: DragEvent) => {
@@ -435,14 +1357,7 @@ export default function SandboxPage() {
       setTimeout(resolve, MIN_ANALYZE_MS)
     );
     try {
-      const dummyMetrics = {
-        lufs: -14.2,
-        dynamicRange: 7.5,
-        spectralCentroid: 2.8,
-        lowEndEnergy: 0.35,
-        stereoWidth: 0.15,
-        reverbEstimate: 0.1,
-      };
+      const exploreMetrics = getExploreMetrics(activeEra.id);
 
       const [result] = await Promise.all([
         callAnalyze({
@@ -452,20 +1367,25 @@ export default function SandboxPage() {
           eraId: activeEra.id,
           xyX: 0.55,
           xyY: 0.62,
-          cachedMetrics: dummyMetrics,
+          cachedMetrics: exploreMetrics,
         }),
         minDelay,
       ]);
 
       setChain(result.chain);
-      setSummary(result.summary);
+      setEngineerNote(result.engineer_note ?? null);
       setInsights(formatInsights(result.metrics));
       setCachedMetrics(result.metrics);
       setCursorX(result.xyPosition.x);
       setCursorY(result.xyPosition.y);
-      setAppliedX(result.xyPosition.x);
-      setAppliedY(result.xyPosition.y);
-      
+      setHasPendingGenerate(false);
+      void persistGeneratedResult(
+        result,
+        activeEra.id,
+        result.xyPosition.x,
+        result.xyPosition.y
+      );
+
       setSession({
         isAnalyzed: true,
         vocalFileUrl: null,
@@ -479,25 +1399,29 @@ export default function SandboxPage() {
       await minDelay;
       setAppState("results");
     }
-  }, [activeEra.id, daw, mic, plugins]);
+  }, [activeEra.id, daw, mic, plugins, persistGeneratedResult, setSession]);
 
   /* ── Remove file ── */
   const handleRemoveVocal = useCallback(() => {
     setVocalFile(null);
     setBeatFile(null);
     setChain([]);
-    setSummary("");
+    setEngineerNote(null);
     setInsights(null);
     setCachedMetrics(null);
+    setActiveGeneratedChainId(null);
+    setEditState(initialEditState);
+    setHasUnsavedEdit(false);
+    setEvaluationIteration(0);
+    setChainValidated(false);
     setErrorBanner(null);
     setUploadError(null);
+    setHasPendingGenerate(false);
     setAppState("empty");
   }, []);
 
   /* ── XY pad drag ── */
   const isDragging = useRef(false);
-
-  /* Debounced API Trigger (REMOVED) */
 
   /* ── Generate Chain ── */
   const handleGenerate = useCallback(async () => {
@@ -514,41 +1438,91 @@ export default function SandboxPage() {
         cachedMetrics,
       });
       setChain(result.chain);
-      setSummary(result.summary);
-      setAppliedX(cursorX);
-      setAppliedY(cursorY);
+      setEngineerNote(result.engineer_note ?? null);
+      setHasPendingGenerate(false);
+      void persistGeneratedResult(result, activeEra.id, cursorX, cursorY);
     } catch {
       showBanner("Failed to generate chain. Try again.");
     } finally {
       setChainLoading(false);
     }
-  }, [cachedMetrics, activeEra.id, daw, mic, plugins, cursorX, cursorY, showBanner]);
+  }, [
+    cachedMetrics,
+    activeEra.id,
+    daw,
+    mic,
+    plugins,
+    cursorX,
+    cursorY,
+    showBanner,
+    persistGeneratedResult,
+  ]);
+
+  const applyLiveXYChain = useCallback((x: number, y: number) => {
+    const currentChain = chainRef.current;
+    if (currentChain.length === 0) return;
+
+    setChain(scaleChainForXY(currentChain, x, y));
+  }, []);
+
+  const scheduleLiveXYChain = useCallback(
+    (x: number, y: number) => {
+      if (liveChainTimerRef.current) {
+        clearTimeout(liveChainTimerRef.current);
+      }
+
+      liveChainTimerRef.current = setTimeout(() => {
+        applyLiveXYChain(x, y);
+      }, 300);
+    },
+    [applyLiveXYChain]
+  );
 
   const updateCursorFromPointer = useCallback(
     (clientX: number, clientY: number) => {
       const pad = padRef.current;
-      if (!pad) return;
+      if (!pad) return null;
       const rect = pad.getBoundingClientRect();
       const newX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const newY = Math.max(
         0,
         Math.min(1, 1 - (clientY - rect.top) / rect.height)
       );
+      const moved =
+        Math.abs(newX - cursorRef.current.x) > 0.001 ||
+        Math.abs(newY - cursorRef.current.y) > 0.001;
       setCursorX(newX);
       setCursorY(newY);
+      if (moved && appState === "results" && cachedMetrics) {
+        setHasPendingGenerate(true);
+      }
+      cursorRef.current = { x: newX, y: newY };
+      return { x: newX, y: newY };
     },
-    []
+    [appState, cachedMetrics]
   );
 
   const handleSliderX = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newX = parseFloat(e.target.value);
+    const next = { x: newX, y: cursorRef.current.y };
+    cursorRef.current = next;
     setCursorX(newX);
-  }, []);
+    if (cachedMetrics) {
+      setHasPendingGenerate(true);
+    }
+    scheduleLiveXYChain(next.x, next.y);
+  }, [cachedMetrics, scheduleLiveXYChain]);
 
   const handleSliderY = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newY = parseFloat(e.target.value);
+    const next = { x: cursorRef.current.x, y: newY };
+    cursorRef.current = next;
     setCursorY(newY);
-  }, []);
+    if (cachedMetrics) {
+      setHasPendingGenerate(true);
+    }
+    scheduleLiveXYChain(next.x, next.y);
+  }, [cachedMetrics, scheduleLiveXYChain]);
 
   const handlePadPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -567,9 +1541,13 @@ export default function SandboxPage() {
     [updateCursorFromPointer]
   );
 
-  const handlePadPointerUp = useCallback(() => {
+  const handlePadPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     isDragging.current = false;
-  }, []);
+    const position = updateCursorFromPointer(e.clientX, e.clientY);
+    if (position) {
+      scheduleLiveXYChain(position.x, position.y);
+    }
+  }, [scheduleLiveXYChain, updateCursorFromPointer]);
 
   /* ═══════════════════════════════════════════════════════════
      Render
@@ -577,7 +1555,15 @@ export default function SandboxPage() {
 
   if (!mounted) return null;
 
+  const isEditing = editState.mode === "edit";
+  const displayedChain =
+    isEditing && editState.editedChain ? editState.editedChain : chain;
+  const showValidatedStamp =
+    !editState.isDirty &&
+    (chainValidated || editState.evaluationResult?.verdict === "professional");
+
   return (
+    <ProjectGate>
     <div className={styles.layout}>
       {/* ─────────────────────────────────────────────────
           ENTRANCE OVERLAY — only from onboarding
@@ -608,9 +1594,14 @@ export default function SandboxPage() {
         activeEra={activeEra}
         onEraChange={handleEraChange}
         savedCount={0}
+        dimNavItems={isEditing}
       />
 
-      <div className={styles.sandboxContent}>
+      <div
+        className={`${styles.sandboxContent} ${
+          appState === "results" ? styles.sandboxContentResults : ""
+        }`}
+      >
         {/* ─────────────────────────────────────────────────
             CENTER PANEL
             ───────────────────────────────────────────────── */}
@@ -619,7 +1610,11 @@ export default function SandboxPage() {
       {/* ─────────────────────────────────────────────────
           CENTER PANEL
           ───────────────────────────────────────────────── */}
-      <main className={styles.center}>
+      <main
+        className={`${styles.center} ${
+          appState === "results" ? styles.centerToolDock : ""
+        } ${isEditing ? styles.editDimmed : ""}`}
+      >
         {/* File chip — shows uploaded file name */}
         {vocalFile && appState !== "empty" && (
           <div className={styles.fileChip}>
@@ -681,6 +1676,8 @@ export default function SandboxPage() {
               <span className={styles.beatUploadText}>
                 {beatFile
                   ? `Beat: ${beatFile.name}`
+                  : project?.beat_filename
+                    ? `Beat: ${project.beat_filename}`
                   : "Add your beat too (optional)"}
               </span>
             </div>
@@ -717,24 +1714,24 @@ export default function SandboxPage() {
             <div className={styles.xyContainer}>
               {/* Top horizontal slider */}
               <div className={styles.sliderTopWrapper}>
-                <input 
-                  type="range" 
-                  min="0" max="1" step="0.01" 
-                  value={cursorX} 
-                  onChange={handleSliderX} 
-                  className={styles.sleekSlider} 
+                <input
+                  type="range"
+                  min="0" max="1" step="0.01"
+                  value={cursorX}
+                  onChange={handleSliderX}
+                  className={styles.sleekSlider}
                 />
               </div>
-              
+
               <div className={styles.xyMiddleRow}>
                 {/* Left vertical slider */}
                 <div className={styles.sliderLeftWrapper}>
-                  <input 
-                    type="range" 
-                    min="0" max="1" step="0.01" 
-                    value={cursorY} 
-                    onChange={handleSliderY} 
-                    className={`${styles.sleekSlider} ${styles.sliderVertical}`} 
+                  <input
+                    type="range"
+                    min="0" max="1" step="0.01"
+                    value={cursorY}
+                    onChange={handleSliderY}
+                    className={`${styles.sleekSlider} ${styles.sliderVertical}`}
                   />
                 </div>
 
@@ -745,6 +1742,7 @@ export default function SandboxPage() {
                   onPointerDown={handlePadPointerDown}
                   onPointerMove={handlePadPointerMove}
                   onPointerUp={handlePadPointerUp}
+                  onPointerCancel={handlePadPointerUp}
                 >
               <span className={`${styles.xyAxisLabel} ${styles.xyAxisTop}`}>
                 Bright
@@ -771,46 +1769,30 @@ export default function SandboxPage() {
             </div>
             </div>
             </div>
-            
-            {/* Insight strip */}
-            <div className={styles.insightStrip}>
-              <div className={styles.insightCard}>
-                <span className={styles.insightLabel}>Loudness</span>
-                <span className={styles.insightValue}>
-                  {insights?.loudness ?? "—"}
-                </span>
-              </div>
-              <div className={styles.insightCard}>
-                <span className={styles.insightLabel}>Dynamic Range</span>
-                <span className={styles.insightValue}>
-                  {insights?.dynamicRange ?? "—"}
-                </span>
-              </div>
-              <div className={styles.insightCard}>
-                <span className={styles.insightLabel}>Brightness</span>
-                <span className={styles.insightValue}>
-                  {insights?.brightness ?? "—"}
-                </span>
-              </div>
-            </div>
 
             {/* Generate Button */}
-            <div className={`${styles.generateWrapper} ${Math.abs(cursorX - appliedX) > 0.001 || Math.abs(cursorY - appliedY) > 0.001 ? styles.generateWrapperVisible : ''}`}>
-              <button 
-                className={`${styles.generateButton} ${chainLoading ? styles.generateButtonLoading : ''}`}
-                onClick={handleGenerate}
-                disabled={chainLoading}
-              >
-                {chainLoading ? (
-                  <>
-                    <div className={styles.analysisSpinner} style={{ width: '12px', height: '12px' }} />
-                    Generating...
-                  </>
+            {!isEditing && (
+              <div className={`${styles.generateWrapper} ${styles.generateWrapperVisible}`}>
+                {hasPendingGenerate || chainLoading ? (
+                  <button
+                    className={`${styles.generateButton} ${chainLoading ? styles.generateButtonLoading : ''}`}
+                    onClick={handleGenerate}
+                    disabled={chainLoading}
+                  >
+                    {chainLoading ? (
+                      <>
+                        <div className={styles.analysisSpinner} style={{ width: '12px', height: '12px' }} />
+                        Generating...
+                      </>
+                    ) : (
+                      "Generate Chain"
+                    )}
+                  </button>
                 ) : (
-                  "Generate Chain"
+                  <span className={styles.generateHint}>Adjust grid to generate</span>
                 )}
-              </button>
-            </div>
+              </div>
+            )}
           </>
         )}
         </main>
@@ -819,6 +1801,29 @@ export default function SandboxPage() {
           RIGHT PANEL
           ───────────────────────────────────────────────── */}
       <aside className={styles.right}>
+        {appState === "results" && (
+          <div className={`${styles.insightStrip} ${isEditing ? styles.editDimmed : ""}`}>
+            <div className={styles.insightCard}>
+              <span className={styles.insightLabel}>Loudness</span>
+              <span className={styles.insightValue}>
+                {insights?.loudness ?? "-"}
+              </span>
+            </div>
+            <div className={styles.insightCard}>
+              <span className={styles.insightLabel}>Dynamic Range</span>
+              <span className={styles.insightValue}>
+                {insights?.dynamicRange ?? "-"}
+              </span>
+            </div>
+            <div className={styles.insightCard}>
+              <span className={styles.insightLabel}>Brightness</span>
+              <span className={styles.insightValue}>
+                {insights?.brightness ?? "-"}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* ── Empty / exploring state ── */}
         {(appState === "empty" || appState === "analyzing") && (
           <div className={styles.rightEmpty}>
@@ -837,7 +1842,6 @@ export default function SandboxPage() {
           <>
             <div className={styles.chainHeader}>
               <span className={styles.chainTitle}>Vocal Chain</span>
-              <span className={styles.eraBadge}>{activeEra.name}</span>
             </div>
             <div className={styles.skeleton}>
               <div className={styles.skeletonLine} />
@@ -852,7 +1856,21 @@ export default function SandboxPage() {
           <>
             <div className={styles.chainHeader}>
               <span className={styles.chainTitle}>Vocal Chain</span>
-              <span className={styles.eraBadge}>{activeEra.name}</span>
+              <div className={styles.chainMeta}>
+                {isEditing && (
+                  <span className={styles.editingBadge}>Editing</span>
+                )}
+                {chain.length > 0 && !isEditing && (
+                  <button
+                    type="button"
+                    className={styles.saveChainButton}
+                    onClick={handleSaveChain}
+                    disabled={saveBusy}
+                  >
+                    {saveBusy ? "Saving" : "Save chain"}
+                  </button>
+                )}
+              </div>
             </div>
 
             {chain.length === 0 && (
@@ -862,18 +1880,31 @@ export default function SandboxPage() {
                 </span>
               </div>
             )}
+
+            {displayedChain.length > 0 && (
+              <VisualVocalChain
+                chain={displayedChain}
+                engineerNote={engineerNote}
+                mode={editState.mode}
+                isDirty={editState.isDirty}
+                hasUnsavedChanges={hasUnsavedEdit}
+                evaluating={editState.evaluating}
+                evaluationResult={editState.evaluationResult}
+                feedbackPanelOpen={editState.feedbackPanelOpen}
+                currentGenre={activeEra.id}
+                currentDaw={daw || "Logic Pro"}
+                validated={showValidatedStamp}
+                onEnterEditMode={handleEnterEditMode}
+                onEditedChainChange={handleEditedChainChange}
+                onEvaluate={handleEvaluateChain}
+                onConfirmSave={handleSaveEditedChain}
+                onDiscard={handleDiscardEdit}
+                onFeedbackPanelOpenChange={handleFeedbackPanelOpenChange}
+              />
+            )}
           </>
         )}
       </aside>
-
-      {/* ─────────────────────────────────────────────────
-          VISUAL VOCAL CHAIN OVERLAY
-          ───────────────────────────────────────────────── */}
-      {appState === "results" && !chainLoading && chain.length > 0 && (
-        <div className={styles.chainOverlay}>
-          <VisualVocalChain chain={chain} />
-        </div>
-      )}
 
       </div>
 
@@ -881,6 +1912,21 @@ export default function SandboxPage() {
           MOBILE BOTTOM TAB BAR
           ───────────────────────────────────────────────── */}
       <MobileTabBar activePage="sandbox" />
+
+      <AuthModal
+        open={showSignUpPrompt}
+        onClose={() => {
+          if (!saveBusy) setShowSignUpPrompt(false);
+        }}
+        onAuthed={handleAuthedForSave}
+        initialMode="signup"
+        title="Save your chain - create a free account"
+        text="Keep this vocal chain in your MimiQ projects."
+        subtext="Your chain will be saved automatically after signing up."
+        nextPath="/sandbox"
+        pendingAuthKey={SAVE_AFTER_AUTH_KEY}
+      />
     </div>
+    </ProjectGate>
   );
 }

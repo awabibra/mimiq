@@ -1,0 +1,51 @@
+.bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  width: 100%;
+  height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.wordmark {
+  color: rgba(245, 245, 247, 0.48);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.signIn {
+  border: 0;
+  background: transparent;
+  color: rgba(245, 245, 247, 0.58);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+  padding: 0;
+  pointer-events: auto;
+  transition:
+    color var(--transition),
+    transform var(--transition);
+}
+
+.signIn:hover {
+  color: rgba(245, 245, 247, 0.86);
+}
+
+.signIn:active {
+  transform: scale(0.96);
+}
+
+@media (max-width: 768px) {
+  .bar {
+    padding: 0 24px;
+  }
+}

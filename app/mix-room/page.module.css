@@ -27,11 +27,11 @@
 
 .segmentedControl {
   display: flex;
+  height: 32px;
+  padding: 2px;
   background: var(--bg-surface);
   border: 0.5px solid rgba(255, 255, 255, 0.06);
   border-radius: 4px;
-  height: 32px;
-  padding: 2px;
 }
 
 .segment {
@@ -44,26 +44,33 @@
   color: var(--text-tertiary);
   border-radius: 3px;
   cursor: pointer;
-  transition: all 150ms ease-out;
+  transition:
+    color 150ms ease-out,
+    background 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+.segment:active {
+  transform: scale(0.98);
 }
 
 .segmentActive {
-  background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.06);
   margin: 0 40px 24px 40px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .columns {
   display: flex;
   flex: 1;
   gap: 24px;
+  min-height: 0;
   padding: 0 40px 40px 40px;
-  min-height: 0; /* allows children to scroll if needed, though instruction said no scroll */
 }
 
 .leftColumn {
@@ -77,10 +84,10 @@
 
 .leftContent {
   width: 100%;
-  max-width: 720px;
+  max-width: 760px;
   display: flex;
   flex-direction: column;
-  transform: translateY(-40px); /* Move it slightly higher */
+  transform: translateY(-24px);
 }
 
 .rightColumn {
@@ -90,20 +97,146 @@
   flex-direction: column;
 }
 
-/* Visualization Styles */
 .vizContainer {
   position: relative;
   width: 100%;
   height: 360px;
-  background: var(--bg-surface);
-  border: 0.5px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
   overflow: hidden;
-  opacity: 0; /* For animation */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 24%),
+    var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 24px 48px rgba(0, 0, 0, 0.34);
+  cursor: crosshair;
+}
+
+.vizContainer::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.18;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.2) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+  mix-blend-mode: overlay;
+}
+
+.gridLine {
+  stroke: rgba(255, 255, 255, 0.055);
+  stroke-width: 0.5;
+}
+
+.beatFill {
+  fill: rgba(142, 142, 147, 0.13);
+}
+
+.beatLine,
+.beatStroke {
+  fill: none;
+  stroke: rgba(142, 142, 147, 0.62);
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+}
+
+.vocalLine,
+.vocalStroke {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.35;
+  opacity: 0.6;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 26%, transparent));
+  vector-effect: non-scaling-stroke;
+}
+
+.collisionZone,
+.collisionBand {
+  fill: rgba(220, 50, 50, 0.13);
+  stroke: rgba(220, 50, 50, 0.32);
+  stroke-width: 0.7;
+}
+
+.pocketZone,
+.pocketBand {
+  fill: rgba(74, 173, 106, 0.1);
+  stroke: rgba(74, 173, 106, 0.24);
+  stroke-width: 0.65;
+}
+
+.yAxis {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 8px;
+  width: 32px;
+  pointer-events: none;
+}
+
+.yAxis span {
+  position: absolute;
+  left: 0;
+  color: rgba(255, 255, 255, 0.32);
+  font-size: 10px;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.hoverLine {
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 0.65;
+  stroke-dasharray: 2 2;
+}
+
+.hoverTooltip {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 118px;
+  padding: 8px 9px;
+  pointer-events: none;
+  color: var(--text-secondary);
+  background: rgba(8, 8, 8, 0.78);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.38);
+  transform: translate(8px, -50%);
+  backdrop-filter: blur(12px);
+}
+
+.hoverTooltip strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.hoverTooltip span {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.vizPlaceholder,
+.vizMessage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  background: rgba(5, 5, 5, 0.42);
+  backdrop-filter: blur(2px);
+  animation: fadeInUp 300ms ease-out both;
 }
 
 .xAxis {
-  display: flex;
   position: relative;
   height: 16px;
   margin-top: 8px;
@@ -111,13 +244,15 @@
 
 .xAxisLabel {
   position: absolute;
-  font-size: 10px;
   color: var(--text-tertiary);
+  font-size: 10px;
   transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   margin-top: 16px;
 }
@@ -134,18 +269,36 @@
   border-radius: 2px;
 }
 
+.legendBeat {
+  background: rgba(142, 142, 147, 0.62);
+}
+
+.legendVocal {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.legendCollision {
+  background: rgba(220, 50, 50, 0.44);
+}
+
+.legendPocket {
+  background: rgba(74, 173, 106, 0.44);
+}
+
 .legendText {
-  font-size: 11px;
   color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .matchScoreSection {
-  margin-top: 32px;
   align-self: center;
   display: flex;
   align-items: center;
   gap: 20px;
-  transition: all 300ms ease-out;
+  margin-top: 30px;
+  transition:
+    opacity 300ms ease-out,
+    transform 300ms ease-out;
 }
 
 .matchScoreLeft {
@@ -156,10 +309,10 @@
 }
 
 .matchLabel {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .matchNumber {
@@ -169,115 +322,203 @@
 }
 
 .matchSubtext {
-  font-size: 12px;
+  max-width: 260px;
   color: var(--text-secondary);
-  max-width: 220px;
-  text-align: left;
+  font-size: 12px;
   line-height: 1.4;
+  text-align: left;
 }
 
-/* Right Column Cards */
-.reportHeader {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.explanationSection,
+.explanationPanel {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+  animation: fadeInUp 360ms ease-out 220ms both;
+}
+
+.explanationTitle {
+  margin-bottom: 8px;
   color: var(--text-tertiary);
-  margin-bottom: 12px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.explanationText {
+  max-width: 640px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reportHeader {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .badge {
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
   background: var(--bg-surface);
   border: 0.5px solid rgba(255, 255, 255, 0.06);
-  padding: 2px 8px;
   border-radius: 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  text-transform: none;
-  letter-spacing: normal;
+}
+
+.confirmation {
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.4;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 8px;
+  animation: fadeInUp 220ms ease-out both;
 }
 
 .cardsContainer {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .actionCard {
-  background: var(--bg-surface);
-  border: 0.5px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
   padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 28%),
+    var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 14px 30px rgba(0, 0, 0, 0.22);
 }
 
 .cardTop {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 10px;
 }
 
 .cardFreq {
+  color: var(--accent);
   font-size: 11px;
   font-weight: 500;
-  color: var(--accent);
 }
 
 .severityBadge {
+  flex-shrink: 0;
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 10px;
   font-weight: 500;
 }
 
+.severityHIGH,
+.severityHigh {
+  color: rgba(220, 50, 50, 0.9);
+  background: rgba(220, 50, 50, 0.15);
+}
+
+.severityMED,
+.severityMed {
+  color: rgba(215, 255, 63, 0.82);
+  background: rgba(215, 255, 63, 0.11);
+}
+
+.severityLOW,
+.severityLow {
+  color: rgba(74, 173, 106, 0.88);
+  background: rgba(74, 173, 106, 0.14);
+}
+
 .cardInstruction {
+  margin-bottom: 12px;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
 }
 
 .cardButton {
-  font-size: 11px;
+  padding: 0;
   color: var(--accent);
+  font-size: 11px;
   background: none;
   border: none;
-  padding: 0;
   cursor: pointer;
-  transition: opacity 150ms ease-out;
+  transition:
+    opacity 150ms ease-out,
+    transform 150ms ease-out;
 }
 
 .cardButton:hover {
   opacity: 0.8;
 }
 
-/* Skeletons */
-.skeletonCard {
+.cardButton:active {
+  transform: scale(0.97);
+}
+
+.cardButton:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.emptyReport {
+  padding: 14px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
   background: var(--bg-surface);
   border: 0.5px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
-  padding: 14px;
+}
+
+.skeletonCard {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 14px;
+  background: var(--bg-surface);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
 }
 
 .skeletonLine {
   height: 12px;
-  border-radius: 4px;
   background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
   animation: pulse 1.5s infinite;
 }
 
 @keyframes pulse {
-  0% { opacity: 0.4; }
-  50% { opacity: 0.7; }
-  100% { opacity: 0.4; }
+  0% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
+
+  100% {
+    opacity: 0.4;
+  }
 }
 
-/* Tooltip */
 .tooltipContainer {
   position: relative;
   display: flex;
@@ -287,21 +528,24 @@
   position: absolute;
   bottom: 100%;
   left: 50%;
-  transform: translateX(-50%) translateY(-4px);
+  padding: 4px 8px;
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  visibility: hidden;
   background: var(--bg-surface);
   border: 0.5px solid rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-  padding: 4px 8px;
   border-radius: 4px;
-  font-size: 11px;
   opacity: 0;
-  visibility: hidden;
-  transition: all 150ms ease-out;
-  white-space: nowrap;
+  transform: translateX(-50%) translateY(-4px);
+  transition:
+    opacity 150ms ease-out,
+    visibility 150ms ease-out,
+    transform 150ms ease-out;
 }
 
 .tooltipContainer:hover .tooltip {
-  opacity: 1;
   visibility: visible;
+  opacity: 1;
   transform: translateX(-50%) translateY(-8px);
 }

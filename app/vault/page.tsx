@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { eras, defaultEra, type Era, getEraById } from "@/lib/eras";
-import type { SavedChain } from "@/lib/types";
+import { defaultEra, type Era, getEraById } from "@/lib/eras";
+import type { GeneratedChain } from "@/lib/types";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import { ProjectGate } from "@/components/ProjectGate";
+import { isGeneratedChain, useProject } from "@/lib/useProject";
 import styles from "./page.module.css";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -76,9 +78,10 @@ function formatDate(iso: string): string {
 }
 
 /** Build the first-step summary line: "Tool — Action" */
-function firstStepSummary(chain: SavedChain): string {
-  if (!chain.chain || chain.chain.length === 0) return "No steps";
-  const step = chain.chain[0];
+function firstStepSummary(chain: GeneratedChain): string {
+  const steps = chain.chain_data.chain;
+  if (!steps || steps.length === 0) return "No steps";
+  const step = steps[0];
   return `${step.tool} — ${step.action}`;
 }
 
@@ -88,30 +91,13 @@ function firstStepSummary(chain: SavedChain): string {
 
 export default function VaultPage() {
   const router = useRouter();
+  const project = useProject((state) => state.project);
 
   /* ── State ── */
-  const [chains, setChains] = useState<SavedChain[]>([]);
-  const [loading, setLoading] = useState(true);
+  const chains = project?.generated_chains.filter(isGeneratedChain) ?? [];
+  const loading = false;
   const [activeEra, setActiveEra] = useState<Era>(defaultEra);
   const [toast, setToast] = useState<string | null>(null);
-
-  /* ── Fetch chains on mount ── */
-  useEffect(() => {
-    async function fetchChains() {
-      try {
-        const res = await fetch("/api/chains");
-        if (res.ok) {
-          const data = await res.json();
-          setChains(data);
-        }
-      } catch {
-        /* Silent fail — show empty state */
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchChains();
-  }, []);
 
   /* ── Era switching updates CSS variable ── */
   useEffect(() => {
@@ -131,7 +117,7 @@ export default function VaultPage() {
 
   /* ── Share handler ── */
   const handleShare = useCallback(
-    async (e: React.MouseEvent, chain: SavedChain) => {
+    async (e: React.MouseEvent, chain: GeneratedChain) => {
       e.stopPropagation(); /* Don't trigger card click */
       const shareUrl = `https://mimiq.app/chain/${chain.id}`;
       try {
@@ -146,7 +132,7 @@ export default function VaultPage() {
 
   /* ── Open handler (navigate to sandbox with chain context) ── */
   const handleOpen = useCallback(
-    (e: React.MouseEvent, chain: SavedChain) => {
+    (e: React.MouseEvent, chain: GeneratedChain) => {
       e.stopPropagation();
       router.push(`/sandbox?chainId=${chain.id}`);
     },
@@ -155,15 +141,15 @@ export default function VaultPage() {
 
   /* ── Card click (same as Open) ── */
   const handleCardClick = useCallback(
-    (chain: SavedChain) => {
+    (chain: GeneratedChain) => {
       router.push(`/sandbox?chainId=${chain.id}`);
     },
     [router]
   );
 
   /* ── Resolve era for a chain ── */
-  const getChainEra = (chain: SavedChain): Era => {
-    return getEraById(chain.era) ?? defaultEra;
+  const getChainEra = (chain: GeneratedChain): Era => {
+    return getEraById(chain.genre) ?? defaultEra;
   };
 
   /* ═══════════════════════════════════════════════════════════
@@ -171,6 +157,7 @@ export default function VaultPage() {
      ═══════════════════════════════════════════════════════════ */
 
   return (
+    <ProjectGate>
     <div className={styles.layout}>
       {/* ── Sidebar ── */}
       <Sidebar
@@ -246,9 +233,16 @@ export default function VaultPage() {
                     >
                       {era.name}
                     </span>
-                    <span className={styles.cardDate}>
-                      {formatDate(chain.created_at)}
-                    </span>
+                    <div className={styles.cardTopMeta}>
+                      {chain.chain_data.validated && (
+                        <span className={styles.validatedBadge} title="Validated chain">
+                          ✓
+                        </span>
+                      )}
+                      <span className={styles.cardDate}>
+                        {formatDate(chain.created_at)}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Step summary */}
@@ -258,7 +252,7 @@ export default function VaultPage() {
 
                   {/* Analysis summary */}
                   <span className={styles.cardAnalysis}>
-                    {chain.summary || "No summary available"}
+                    {chain.chain_data.summary || "No summary available"}
                   </span>
 
                   {/* Bottom row: XY mini + icon buttons */}
@@ -268,8 +262,8 @@ export default function VaultPage() {
                       <div
                         className={styles.xyMiniDot}
                         style={{
-                          left: `${chain.xy_x * 100}%`,
-                          top: `${(1 - chain.xy_y) * 100}%`,
+                          left: `${(chain.chain_data.xyPosition?.x ?? 0.5) * 100}%`,
+                          top: `${(1 - (chain.chain_data.xyPosition?.y ?? 0.5)) * 100}%`,
                           backgroundColor: era.accent,
                         }}
                       />
@@ -308,5 +302,6 @@ export default function VaultPage() {
       {/* ── Toast ── */}
       {toast && <div className={styles.toast}>{toast}</div>}
     </div>
+    </ProjectGate>
   );
 }

@@ -134,6 +134,25 @@
   justify-content: space-between;
 }
 
+.cardTopMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.validatedBadge {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 54%, transparent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .eraPill {
   display: inline-flex;
   align-items: center;

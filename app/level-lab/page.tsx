@@ -4,43 +4,148 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import GateScreen from "@/components/GateScreen";
 import { Sidebar } from "@/components/Sidebar";
+import { ProjectGate } from "@/components/ProjectGate";
 import { useStore } from "@/lib/store";
 import { useAudioStore } from "@/lib/useAudioStore";
+import { saveProjectPatch } from "@/lib/projects";
+import { getLatestGeneratedChain, useProject } from "@/lib/useProject";
 import { eras, defaultEra } from "@/lib/eras";
 import styles from "./page.module.css";
-import type { AudioMetrics, LevelLabResponse } from "@/lib/types";
+import type { AudioMetrics, LevelLabResponse, LevelMetrics } from "@/lib/types";
 
-// Mock envelope generator for the SVG
-const generateEnvelope = (lufs: number, dr: number, count = 200) => {
-  const points = [];
-  // Ensure we have some spikes and some dips to show all colors
-  const base = Math.max(-30, Math.min(-10, lufs));
-  for (let i = 0; i < count; i++) {
-    const time = i / (count - 1);
-    const noise = Math.sin(i * 0.1) * Math.cos(i * 0.3) * (dr * 0.5) + (Math.random() - 0.5) * dr;
-    let dbfs = base + noise;
-    
-    // Inject a few guaranteed spikes and dips if needed
-    if (i === Math.floor(count * 0.2)) dbfs = -4; // Spike
-    if (i === Math.floor(count * 0.7)) dbfs = -22; // Dip
-    if (i === Math.floor(count * 0.5)) dbfs = -12; // Pocket
-    
-    if (dbfs > 0) dbfs = 0;
-    if (dbfs < -40) dbfs = -40;
-    points.push({ time, dbfs });
+interface GainPoint {
+  time: number;
+  dbfs: number;
+}
+
+interface LevelLabServerResponse extends Partial<LevelLabResponse> {
+  status?: "client_only";
+  message?: string;
+}
+
+async function analyzeAudioClient(file: File): Promise<LevelMetrics> {
+  const AudioCtx =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+
+  if (!AudioCtx) {
+    throw new Error("Web Audio API is unavailable in this browser.");
   }
-  return points;
-};
+
+  const ctx = new AudioCtx();
+  const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+  const data = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+
+  const blockSize = Math.floor(0.4 * sampleRate);
+  const hopSize = Math.floor(0.1 * sampleRate);
+  const blocks: number[] = [];
+
+  for (let i = 0; i + blockSize < data.length; i += hopSize) {
+    const block = data.slice(i, i + blockSize);
+    const rms = Math.sqrt(block.reduce((s, x) => s + x * x, 0) / block.length);
+    const loudness = -0.691 + 10 * Math.log10(rms * rms + 1e-10);
+    if (loudness > -70) blocks.push(loudness);
+  }
+
+  const integrated = blocks.length
+    ? -0.691 +
+      10 *
+        Math.log10(
+          blocks.reduce((s, b) => s + Math.pow(10, b / 10), 0) /
+            blocks.length
+        )
+    : -60;
+
+  const sorted = [...blocks].sort((a, b) => a - b);
+  const lra =
+    sorted.length > 10
+      ? sorted[Math.floor(sorted.length * 0.95)] -
+        sorted[Math.floor(sorted.length * 0.1)]
+      : 0;
+
+  const peak = data.reduce((max, s) => Math.max(max, Math.abs(s)), 0);
+  const truePeak = 20 * Math.log10(peak + 1e-10);
+
+  const step = Math.max(1, Math.floor(blocks.length / 200));
+  const gainRide = blocks.filter((_, i) => i % step === 0).slice(0, 200);
+
+  await ctx.close();
+
+  return {
+    lufs: Math.round(integrated * 10) / 10,
+    dynamicRange: Math.round(lra * 10) / 10,
+    truePeak: Math.round(truePeak * 10) / 10,
+    gainRide,
+  };
+}
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+function scoreFromMetrics(metrics: LevelMetrics) {
+  const loudnessScore = Math.max(0, 35 - Math.abs(metrics.lufs - -14) * 4);
+  const dynamicsScore = Math.max(0, 35 - Math.abs(metrics.dynamicRange - 6) * 5);
+  const peakScore = metrics.truePeak <= -1 ? 20 : Math.max(0, 20 - (metrics.truePeak + 1) * 8);
+  const spikePenalty = metrics.gainRide.filter((point) => point > -6).length * 1.5;
+
+  return Math.round(clamp(loudnessScore + dynamicsScore + peakScore + 10 - spikePenalty, 0, 100));
+}
+
+function buildClientReport(metrics: LevelMetrics): LevelLabResponse {
+  const spikeCount = metrics.gainRide.filter((point) => point > -6).length;
+
+  return {
+    sessionScore: scoreFromMetrics(metrics),
+    loudnessVerdict:
+      metrics.lufs > -10
+        ? "Too loud for a vocal stem"
+        : metrics.lufs < -22
+          ? "Still too quiet"
+          : "Loudness is in range",
+    dynamicsVerdict:
+      metrics.dynamicRange > 10
+        ? "Dynamics still need control"
+        : metrics.dynamicRange < 3
+          ? "Dynamics are over-compressed"
+          : "Dynamics are controlled",
+    brightnessVerdict:
+      metrics.truePeak > -1
+        ? "True peak is too hot"
+        : "True peak has headroom",
+    gainRideCallout:
+      spikeCount > 0
+        ? `${spikeCount} loud point${spikeCount === 1 ? "" : "s"} cross -6 dBFS.`
+        : "No gain ride points cross -6 dBFS.",
+    nextStep:
+      metrics.truePeak > -1
+        ? "Pull the vocal down before limiting."
+        : "Level-match against the beat and print again.",
+    processedMetrics: metrics,
+  };
+}
+
+function gainRideToPoints(gainRide: number[] | undefined): GainPoint[] {
+  const points = gainRide ?? [];
+
+  return points.map((dbfs, index) => ({
+    time: points.length <= 1 ? 0 : index / (points.length - 1),
+    dbfs,
+  }));
+}
 
 export default function LevelLabPage() {
   const router = useRouter();
   const { daw, era: storeEra } = useStore();
   const activeEra = eras.find((e) => e.id === storeEra) || defaultEra;
+  const project = useProject((state) => state.project);
+  const setActiveProject = useProject((state) => state.setActiveProject);
+  const updateProject = useProject((state) => state.updateProject);
+  const latestProjectChain = getLatestGeneratedChain(project);
   
   const { 
-    vocalFileUrl, 
     analysisResult, 
-    processedFileUrl, 
     processedAnalysis, 
     setSession 
   } = useAudioStore();
@@ -48,6 +153,7 @@ export default function LevelLabPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [typewriterText, setTypewriterText] = useState("");
+  const [errorText, setErrorText] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Animation states for STATE B
@@ -57,10 +163,13 @@ export default function LevelLabPage() {
   const [gainVisible, setGainVisible] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
 
-  const rawMetrics: AudioMetrics | null = analysisResult?.metrics;
-  const levelLabData: LevelLabResponse | null = processedAnalysis;
+  const rawMetrics: AudioMetrics | null =
+    analysisResult?.metrics ?? latestProjectChain?.chain_data.measurements ?? null;
+  const levelLabData: LevelLabResponse | null =
+    (processedAnalysis as LevelLabResponse | null) ??
+    (project?.level_lab_report as LevelLabResponse | null);
 
-  const hasProcessed = !!processedFileUrl && !!levelLabData;
+  const hasProcessed = !!levelLabData;
 
   // Typewriter effect during processing
   useEffect(() => {
@@ -104,10 +213,79 @@ export default function LevelLabPage() {
     return () => clearInterval(interval);
   }, [scoreVisible, levelLabData?.sessionScore]);
 
+  const saveLevelLabReport = (report: LevelLabResponse, processedFileUrl?: string) => {
+    setSession({
+      processedFileUrl,
+      processedAnalysis: report,
+    });
+
+    if (project) {
+      const patch = { level_lab_report: report };
+      updateProject(patch);
+      saveProjectPatch(project.id, patch)
+        .then(setActiveProject)
+        .catch(() => {});
+    }
+  };
+
+  const mergeServerReport = (
+    clientReport: LevelLabResponse,
+    serverData: LevelLabServerResponse
+  ): LevelLabResponse => {
+    const serverMetrics = serverData.processedMetrics;
+
+    return {
+      ...clientReport,
+      sessionScore: serverData.sessionScore ?? clientReport.sessionScore,
+      loudnessVerdict:
+        serverData.loudnessVerdict ?? clientReport.loudnessVerdict,
+      dynamicsVerdict:
+        serverData.dynamicsVerdict ?? clientReport.dynamicsVerdict,
+      brightnessVerdict:
+        serverData.brightnessVerdict ?? clientReport.brightnessVerdict,
+      gainRideCallout:
+        serverData.gainRideCallout ?? clientReport.gainRideCallout,
+      nextStep: serverData.nextStep ?? clientReport.nextStep,
+      processedMetrics: {
+        ...clientReport.processedMetrics,
+        ...serverMetrics,
+        gainRide: serverMetrics?.gainRide?.length
+          ? serverMetrics.gainRide
+          : clientReport.processedMetrics.gainRide,
+        truePeak:
+          serverMetrics?.truePeak ?? clientReport.processedMetrics.truePeak,
+      },
+    };
+  };
+
   const handleFileUpload = async (file: File) => {
-    if (!rawMetrics) return;
+    if (!rawMetrics) {
+      setErrorText("Analyze a raw vocal in Sandbox before using Level Lab.");
+      return;
+    }
+
     setIsProcessing(true);
-    
+    setErrorText(null);
+
+    let clientReport: LevelLabResponse;
+    let processedFileUrl: string;
+
+    try {
+      const clientMetrics = await analyzeAudioClient(file);
+      clientReport = buildClientReport(clientMetrics);
+      processedFileUrl = URL.createObjectURL(file);
+
+      saveLevelLabReport(clientReport, processedFileUrl);
+      setIsProcessing(false);
+    } catch (e) {
+      console.error(e);
+      setIsProcessing(false);
+      setErrorText(
+        e instanceof Error ? e.message : "Level Lab could not analyze that file."
+      );
+      return;
+    }
+
     try {
       const formData = new FormData();
       formData.append("processedFile", file);
@@ -120,22 +298,15 @@ export default function LevelLabPage() {
         body: formData,
       });
 
-      if (!res.ok) throw new Error("Processing failed");
+      const data = (await res.json()) as LevelLabServerResponse;
 
-      const data = await res.json();
-      
-      // Artificial delay to let the progress bar finish its 3s animation
-      setTimeout(() => {
-        setSession({
-          processedFileUrl: URL.createObjectURL(file),
-          processedAnalysis: data,
-        });
-        setIsProcessing(false);
-      }, 3000);
+      if (!res.ok) throw new Error(data.message || "Processing failed");
+      if (data.status === "client_only") return;
+
+      saveLevelLabReport(mergeServerReport(clientReport, data), processedFileUrl);
 
     } catch (e) {
-      console.error(e);
-      setIsProcessing(false);
+      console.warn("[level-lab] Server review unavailable.", e);
     }
   };
 
@@ -162,13 +333,14 @@ export default function LevelLabPage() {
     }
   };
 
-  const envelopePoints = hasProcessed 
-    ? generateEnvelope(levelLabData!.processedMetrics.lufs, levelLabData!.processedMetrics.dynamicRange)
+  const envelopePoints = hasProcessed
+    ? gainRideToPoints(levelLabData!.processedMetrics.gainRide)
     : [];
+  const spikePoints = envelopePoints.filter((point) => point.dbfs > -6);
 
   const getPathD = (points: typeof envelopePoints, isFill: boolean) => {
     if (points.length === 0) return "";
-    const yMap = (db: number) => (Math.abs(db) / 40) * 100;
+    const yMap = (db: number) => ((0 - clamp(db, -40, 0)) / 40) * 100;
     
     let d = `M 0 ${isFill ? 100 : yMap(points[0].dbfs)}`;
     if (isFill) d += ` L 0 ${yMap(points[0].dbfs)}`;
@@ -183,13 +355,24 @@ export default function LevelLabPage() {
     return d;
   };
 
+  const yMap = (db: number) => ((0 - clamp(db, -40, 0)) / 40) * 100;
+
   const formatVal = (v: number | undefined, isFreq = false) => {
     if (v === undefined) return "-";
     if (isFreq) return (v / 1000).toFixed(2);
     return Math.abs(v).toFixed(1);
   };
 
-  const getDeltaColor = (before: number, after: number, metric: 'lufs' | 'dr' | 'cent') => {
+  const formatDb = (v: number | undefined) => {
+    if (v === undefined) return "-";
+    return `${v.toFixed(1)}`;
+  };
+
+  const getDeltaColor = (
+    before: number,
+    after: number,
+    metric: "lufs" | "dr" | "cent" | "peak"
+  ) => {
     if (metric === 'lufs') {
       const bDiff = Math.abs(before - (-14));
       const aDiff = Math.abs(after - (-14));
@@ -207,18 +390,16 @@ export default function LevelLabPage() {
       if (after < before - 300) return 'rgba(220,50,50,1)';
       return 'var(--text-secondary)';
     }
+    if (metric === "peak") {
+      if (after > -1) return "rgba(220,50,50,1)";
+      if (after <= -6) return "var(--text-secondary)";
+      return "rgba(74,173,106,1)";
+    }
     return 'var(--text-secondary)';
   };
 
-  const MetricsBefore = () => (
-    <div className={styles.metricsRow}>
-      <div className={styles.metricPill}><span>LUFS</span> -{formatVal(rawMetrics?.lufs)}</div>
-      <div className={styles.metricPill}><span>DR</span> {formatVal(rawMetrics?.dynamicRange)}dB</div>
-      <div className={styles.metricPill}><span>CENT</span> {formatVal(rawMetrics?.spectralCentroid, true)}k</div>
-    </div>
-  );
-
   return (
+    <ProjectGate>
     <div className={styles.layout}>
       <Sidebar
         activePage="level-lab"
@@ -247,6 +428,10 @@ export default function LevelLabPage() {
                 <div className={styles.uploadBody}>
                   Apply the chain in your DAW, export the vocal, and drop it here. MimiQ will show you exactly what changed.
                 </div>
+
+                {errorText && (
+                  <div className={styles.deltaInterpretation}>{errorText}</div>
+                )}
 
                 {!isProcessing ? (
                   <>
@@ -281,7 +466,11 @@ export default function LevelLabPage() {
 
                 <div className={styles.cardDivider} />
                 <div className={styles.beforeLabel}>BEFORE — raw vocal</div>
-                <MetricsBefore />
+                <div className={styles.metricsRow}>
+                  <div className={styles.metricPill}><span>LUFS</span> -{formatVal(rawMetrics?.lufs)}</div>
+                  <div className={styles.metricPill}><span>DR</span> {formatVal(rawMetrics?.dynamicRange)}dB</div>
+                  <div className={styles.metricPill}><span>CENT</span> {formatVal(rawMetrics?.spectralCentroid, true)}k</div>
+                </div>
               </div>
             </div>
           ) : (
@@ -339,9 +528,9 @@ export default function LevelLabPage() {
                         </div>
                       </div>
                       <div className={styles.miniCard}>
-                        <div className={styles.miniCardLabel}>Centroid</div>
-                        <div className={styles.miniCardValue} style={{ color: getDeltaColor(rawMetrics?.spectralCentroid || 2500, levelLabData!.processedMetrics.spectralCentroid, 'cent') }}>
-                          {formatVal(levelLabData!.processedMetrics.spectralCentroid, true)}k
+                        <div className={styles.miniCardLabel}>True Peak</div>
+                        <div className={styles.miniCardValue} style={{ color: getDeltaColor(0, levelLabData!.processedMetrics.truePeak, 'peak') }}>
+                          {formatDb(levelLabData!.processedMetrics.truePeak)}
                         </div>
                       </div>
                     </div>
@@ -411,6 +600,17 @@ export default function LevelLabPage() {
                           <path d={getPathD(envelopePoints, false)} fill="none" stroke="rgba(220,50,50,0.4)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                         </g>
 
+                        {spikePoints.map((point, index) => (
+                          <circle
+                            key={`${point.time}-${index}`}
+                            cx={point.time * 100}
+                            cy={yMap(point.dbfs)}
+                            r="1"
+                            fill="rgba(220,50,50,0.95)"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ))}
+
                       </svg>
                     </div>
                   </div>
@@ -421,31 +621,31 @@ export default function LevelLabPage() {
                 <div className={styles.rightPanel}>
                   <div className={styles.panelLabel}>WHAT CHANGED</div>
                   <div className={styles.deltaCards}>
-                    
+
                     {[
-                      { 
-                        name: "Loudness", 
-                        b: -(rawMetrics?.lufs || -14), 
-                        a: -levelLabData!.processedMetrics.lufs, 
+                      {
+                        name: "Loudness",
+                        b: rawMetrics?.lufs ?? -14,
+                        a: levelLabData!.processedMetrics.lufs,
                         interp: levelLabData!.loudnessVerdict,
                         metric: 'lufs' as const
                       },
-                      { 
-                        name: "Dynamic Range", 
-                        b: rawMetrics?.dynamicRange || 6, 
-                        a: levelLabData!.processedMetrics.dynamicRange, 
+                      {
+                        name: "Dynamic Range",
+                        b: rawMetrics?.dynamicRange || 6,
+                        a: levelLabData!.processedMetrics.dynamicRange,
                         interp: levelLabData!.dynamicsVerdict,
                         metric: 'dr' as const
                       },
-                      { 
-                        name: "Brightness", 
-                        b: rawMetrics?.spectralCentroid || 2500, 
-                        a: levelLabData!.processedMetrics.spectralCentroid, 
+                      {
+                        name: "True Peak",
+                        b: undefined,
+                        a: levelLabData!.processedMetrics.truePeak,
                         interp: levelLabData!.brightnessVerdict,
-                        metric: 'cent' as const
+                        metric: 'peak' as const
                       }
                     ].map((card, i) => {
-                      const color = getDeltaColor(card.b, card.a, card.metric);
+                      const color = getDeltaColor(card.b ?? card.a, card.a, card.metric);
                       const isBetter = color === 'rgba(74,173,106,1)';
                       const isWorse = color === 'rgba(220,50,50,1)';
                       const beforeWidth = '40%'; 
@@ -460,9 +660,9 @@ export default function LevelLabPage() {
                           <div className={styles.deltaCardTop}>
                             <div className={styles.deltaName}>{card.name}</div>
                             <div className={styles.deltaValues}>
-                              <span className={styles.deltaBefore}>{card.metric === 'cent' ? formatVal(card.b, true)+'k' : formatVal(card.b)}</span>
+                              <span className={styles.deltaBefore}>{card.b === undefined ? "-" : formatVal(card.b)}</span>
                               <span className={styles.deltaArrow} style={{ color }}>{isBetter ? '↑' : isWorse ? '↓' : '→'}</span>
-                              <span className={styles.deltaAfter} style={{ color }}>{card.metric === 'cent' ? formatVal(card.a, true)+'k' : formatVal(card.a)}</span>
+                              <span className={styles.deltaAfter} style={{ color }}>{card.metric === 'peak' ? formatDb(card.a) : formatVal(card.a)}</span>
                             </div>
                           </div>
                           
@@ -503,5 +703,6 @@ export default function LevelLabPage() {
         </div>
       </GateScreen>
     </div>
+    </ProjectGate>
   );
 }
