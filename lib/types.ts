@@ -18,7 +18,7 @@ export interface AudioMetrics {
   reverbEstimate: number;
   /** Present only when a beat file was submitted alongside the vocal. */
   beatLufs?: number;
-  /** The primary frequency range (kHz) where the vocal and beat collide. */
+  /** The primary frequency range (Hz) where the vocal and beat collide. */
   collisionFrequency?: number;
 }
 
@@ -56,6 +56,15 @@ export interface AnalysisResponse {
   engineer_note?: string;
   xyPosition: XYPosition;
   metrics: AudioMetrics;
+  analysis_version?: "1.0";
+  fallback_used?: boolean;
+  audio_service_status?: "ok" | "fallback" | "error";
+}
+
+export interface LevelLabDelta {
+  verdict: "improved" | "regressed" | "unknown";
+  lufs_delta: number;
+  dynamic_range_delta: number;
 }
 
 /** Full structured response from Claude / the level-lab route. */
@@ -67,6 +76,7 @@ export interface LevelLabResponse {
   gainRideCallout: string;
   nextStep: string;
   processedMetrics: LevelMetrics;
+  delta: LevelLabDelta;
 }
 
 export interface LevelMetrics {
@@ -97,8 +107,9 @@ export interface EvaluationResult {
   overall: string;
   issues: EvaluationIssue[];
   strengths: string[];
-  verdict: "needs_work" | "good" | "professional";
-  verdict_reason: string;
+  measured_fit: "good" | "needs_adjustment" | "rebuild";
+  flags: string[];
+  explanation: string;
 }
 
 /** A saved chain record from the Supabase `chains` table. */

@@ -86,7 +86,7 @@ export default function Home() {
               <h1 className={styles.heroHeadline}>
                 Your vocal.
                 <br />
-                Your exact chain.
+                Your measured vocal chain.
               </h1>
               <p className={styles.heroSubline}>
                 Upload your raw vocal. MimiQ measures it, then tells you exactly
@@ -136,7 +136,7 @@ export default function Home() {
               <div className={styles.stepCard}>
                 <span className={styles.stepNumber}>03</span>
                 <ListIcon />
-                <h3 className={styles.stepTitle}>Get your exact chain</h3>
+                <h3 className={styles.stepTitle}>Get your vocal chain draft</h3>
                 <p className={styles.stepText}>
                   A numbered, DAW-specific mixing chain tailored to your voice.
                   Open your DAW and follow the steps.

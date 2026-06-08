@@ -11,7 +11,12 @@ import { saveProjectPatch } from "@/lib/projects";
 import { getLatestGeneratedChain, useProject } from "@/lib/useProject";
 import { eras, defaultEra } from "@/lib/eras";
 import styles from "./page.module.css";
-import type { AudioMetrics, LevelLabResponse, LevelMetrics } from "@/lib/types";
+import type {
+  AudioMetrics,
+  LevelLabDelta,
+  LevelLabResponse,
+  LevelMetrics,
+} from "@/lib/types";
 
 interface GainPoint {
   time: number;
@@ -93,7 +98,32 @@ function scoreFromMetrics(metrics: LevelMetrics) {
   return Math.round(clamp(loudnessScore + dynamicsScore + peakScore + 10 - spikePenalty, 0, 100));
 }
 
-function buildClientReport(metrics: LevelMetrics): LevelLabResponse {
+function buildLevelDelta(
+  rawMetrics: AudioMetrics,
+  processedMetrics: LevelMetrics
+): LevelLabDelta {
+  const lufs_delta = Math.round((processedMetrics.lufs - rawMetrics.lufs) * 10) / 10;
+  const dynamic_range_delta =
+    Math.round((processedMetrics.dynamicRange - rawMetrics.dynamicRange) * 10) / 10;
+  const rawLufsDistance = Math.abs(rawMetrics.lufs - -14);
+  const processedLufsDistance = Math.abs(processedMetrics.lufs - -14);
+  const rawDynamicsDistance = Math.abs(rawMetrics.dynamicRange - 6);
+  const processedDynamicsDistance = Math.abs(processedMetrics.dynamicRange - 6);
+  const improved =
+    processedLufsDistance < rawLufsDistance - 0.5 ||
+    processedDynamicsDistance < rawDynamicsDistance - 0.5;
+  const regressed =
+    processedLufsDistance > rawLufsDistance + 0.5 ||
+    processedDynamicsDistance > rawDynamicsDistance + 0.5;
+
+  return {
+    verdict: improved && !regressed ? "improved" : regressed && !improved ? "regressed" : "unknown",
+    lufs_delta,
+    dynamic_range_delta,
+  };
+}
+
+function buildClientReport(metrics: LevelMetrics, rawMetrics: AudioMetrics): LevelLabResponse {
   const spikeCount = metrics.gainRide.filter((point) => point > -6).length;
 
   return {
@@ -123,6 +153,7 @@ function buildClientReport(metrics: LevelMetrics): LevelLabResponse {
         ? "Pull the vocal down before limiting."
         : "Level-match against the beat and print again.",
     processedMetrics: metrics,
+    delta: buildLevelDelta(rawMetrics, metrics),
   };
 }
 
@@ -230,9 +261,19 @@ export default function LevelLabPage() {
 
   const mergeServerReport = (
     clientReport: LevelLabResponse,
-    serverData: LevelLabServerResponse
+    serverData: LevelLabServerResponse,
+    rawMetrics: AudioMetrics
   ): LevelLabResponse => {
     const serverMetrics = serverData.processedMetrics;
+    const processedMetrics = {
+      ...clientReport.processedMetrics,
+      ...serverMetrics,
+      gainRide: serverMetrics?.gainRide?.length
+        ? serverMetrics.gainRide
+        : clientReport.processedMetrics.gainRide,
+      truePeak:
+        serverMetrics?.truePeak ?? clientReport.processedMetrics.truePeak,
+    };
 
     return {
       ...clientReport,
@@ -246,15 +287,8 @@ export default function LevelLabPage() {
       gainRideCallout:
         serverData.gainRideCallout ?? clientReport.gainRideCallout,
       nextStep: serverData.nextStep ?? clientReport.nextStep,
-      processedMetrics: {
-        ...clientReport.processedMetrics,
-        ...serverMetrics,
-        gainRide: serverMetrics?.gainRide?.length
-          ? serverMetrics.gainRide
-          : clientReport.processedMetrics.gainRide,
-        truePeak:
-          serverMetrics?.truePeak ?? clientReport.processedMetrics.truePeak,
-      },
+      processedMetrics,
+      delta: serverData.delta ?? buildLevelDelta(rawMetrics, processedMetrics),
     };
   };
 
@@ -267,26 +301,8 @@ export default function LevelLabPage() {
     setIsProcessing(true);
     setErrorText(null);
 
-    let clientReport: LevelLabResponse;
-    let processedFileUrl: string;
-
     try {
-      const clientMetrics = await analyzeAudioClient(file);
-      clientReport = buildClientReport(clientMetrics);
-      processedFileUrl = URL.createObjectURL(file);
-
-      saveLevelLabReport(clientReport, processedFileUrl);
-      setIsProcessing(false);
-    } catch (e) {
-      console.error(e);
-      setIsProcessing(false);
-      setErrorText(
-        e instanceof Error ? e.message : "Level Lab could not analyze that file."
-      );
-      return;
-    }
-
-    try {
+      const processedFileUrl = URL.createObjectURL(file);
       const formData = new FormData();
       formData.append("processedFile", file);
       formData.append("rawMetrics", JSON.stringify(rawMetrics));
@@ -301,12 +317,44 @@ export default function LevelLabPage() {
       const data = (await res.json()) as LevelLabServerResponse;
 
       if (!res.ok) throw new Error(data.message || "Processing failed");
-      if (data.status === "client_only") return;
 
-      saveLevelLabReport(mergeServerReport(clientReport, data), processedFileUrl);
+      let clientReport: LevelLabResponse | null = null;
+      try {
+        const clientMetrics = await analyzeAudioClient(file);
+        clientReport = buildClientReport(clientMetrics, rawMetrics);
+      } catch (clientError) {
+        if (data.status === "client_only" || !data.processedMetrics) {
+          throw clientError;
+        }
+      }
+
+      const baseReport =
+        clientReport ??
+        buildClientReport(
+          {
+            lufs: data.processedMetrics!.lufs,
+            dynamicRange: data.processedMetrics!.dynamicRange,
+            truePeak: data.processedMetrics!.truePeak,
+            gainRide: data.processedMetrics!.gainRide ?? [],
+            spectralCentroid: data.processedMetrics!.spectralCentroid,
+          },
+          rawMetrics
+        );
+
+      const finalReport =
+        data.status === "client_only"
+          ? baseReport
+          : mergeServerReport(baseReport, data, rawMetrics);
+
+      saveLevelLabReport(finalReport, processedFileUrl);
 
     } catch (e) {
       console.warn("[level-lab] Server review unavailable.", e);
+      setErrorText(
+        e instanceof Error ? e.message : "Level Lab could not analyze that file."
+      );
+    } finally {
+      setIsProcessing(false);
     }
   };
 

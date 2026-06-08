@@ -2126,6 +2126,14 @@ function FeedbackPanel({
   onJump: (issue: EvaluationIssue) => void;
 }) {
   const [strengthsOpen, setStrengthsOpen] = useState(false);
+  const fitClass =
+    result.measured_fit === "good" ? styles.verdict_good : styles.verdict_needs_work;
+  const fitLabel =
+    result.measured_fit === "good"
+      ? "✓ Chain draft ready to save"
+      : result.measured_fit === "needs_adjustment"
+        ? "Measured fit needs adjustment"
+        : "Measured fit needs rebuild";
 
   return (
     <div className={styles.feedbackPanel}>
@@ -2197,15 +2205,9 @@ function FeedbackPanel({
         </AnimatePresence>
       </section>
 
-      <section className={`${styles.verdict} ${styles[`verdict_${result.verdict}`]}`}>
-        <span>
-          {result.verdict === "professional"
-            ? "✓ Chain validated - ready to save"
-            : result.verdict === "good"
-              ? "Getting there"
-              : "Keep refining"}
-        </span>
-        <p>{result.verdict_reason}</p>
+      <section className={`${styles.verdict} ${fitClass}`}>
+        <span>{fitLabel}</span>
+        <p>{result.explanation}</p>
       </section>
 
       <button

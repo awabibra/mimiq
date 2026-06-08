@@ -951,9 +951,9 @@ export default function SandboxPage() {
     }
 
     const result = editState.evaluationResult;
-    const validated = result?.verdict === "professional";
+    const validated = result?.measured_fit === "good";
     const evaluationSummary =
-      result?.overall ?? "Saved without a professional validation pass.";
+      result?.overall ?? "Saved without a measured fit check.";
     const iterationCount = Math.max(evaluationIteration, validated || result ? 1 : 0);
     const validationTimestamp = new Date().toISOString();
 
@@ -987,7 +987,7 @@ export default function SandboxPage() {
     }
 
     closeEditMode();
-    showBanner(validated ? "Chain validated and saved." : "Chain changes saved.");
+    showBanner(validated ? "Measured chain draft saved." : "Chain changes saved.");
   }, [
     activeGeneratedChainId,
     closeEditMode,
@@ -1027,7 +1027,7 @@ export default function SandboxPage() {
       });
 
       setEvaluationIteration(nextIteration);
-      setChainValidated(result.verdict === "professional");
+      setChainValidated(result.measured_fit === "good");
       setEditState((state) => ({
         ...state,
         isDirty: false,
@@ -1054,8 +1054,9 @@ export default function SandboxPage() {
             },
           ],
           strengths: [],
-          verdict: "needs_work",
-          verdict_reason: "The chain was not validated by the evaluation engine.",
+          measured_fit: "rebuild",
+          flags: ["unknown"],
+          explanation: "The chain was not evaluated by the measured fit engine.",
         },
         feedbackPanelOpen: true,
       }));
@@ -1560,7 +1561,7 @@ export default function SandboxPage() {
     isEditing && editState.editedChain ? editState.editedChain : chain;
   const showValidatedStamp =
     !editState.isDirty &&
-    (chainValidated || editState.evaluationResult?.verdict === "professional");
+    (chainValidated || editState.evaluationResult?.measured_fit === "good");
 
   return (
     <ProjectGate>

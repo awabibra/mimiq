@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { eras } from "@/lib/eras";
-import type { AudioMetrics, LevelLabResponse, LevelMetrics } from "@/lib/types";
+import type {
+  AudioMetrics,
+  LevelLabDelta,
+  LevelLabResponse,
+  LevelMetrics,
+} from "@/lib/types";
 
 /* ═══════════════════════════════════════════════════════════════
    Constants
@@ -86,7 +91,9 @@ Rules:
    Response parser with retry
    ═══════════════════════════════════════════════════════════════ */
 
-function parseClaudeResponse(raw: string): Omit<LevelLabResponse, "processedMetrics"> | null {
+type LevelLabReview = Omit<LevelLabResponse, "processedMetrics" | "delta">;
+
+function parseClaudeResponse(raw: string): LevelLabReview | null {
   try {
     let cleaned = raw.trim();
     if (cleaned.startsWith("```")) {
@@ -106,7 +113,7 @@ function parseClaudeResponse(raw: string): Omit<LevelLabResponse, "processedMetr
       return null;
     }
 
-    return parsed as Omit<LevelLabResponse, "processedMetrics">;
+    return parsed as LevelLabReview;
   } catch {
     return null;
   }
@@ -114,8 +121,8 @@ function parseClaudeResponse(raw: string): Omit<LevelLabResponse, "processedMetr
 
 async function callClaudeWithRetry(
   prompt: string,
-  fallback: Omit<LevelLabResponse, "processedMetrics">
-): Promise<Omit<LevelLabResponse, "processedMetrics">> {
+  fallback: LevelLabReview
+): Promise<LevelLabReview> {
   const client = getAnthropicClient();
   if (!client) return fallback;
 
@@ -195,7 +202,7 @@ function buildDeterministicReview(
   rawMetrics: AudioMetrics,
   processedMetrics: LevelMetrics,
   daw: string
-): Omit<LevelLabResponse, "processedMetrics"> {
+): LevelLabReview {
   const loudnessDistance = Math.abs(processedMetrics.lufs - -14);
   const dynamicsDistance = Math.abs(processedMetrics.dynamicRange - 6);
   const peakPenalty = processedMetrics.truePeak > -1 ? 18 : 0;
@@ -231,6 +238,31 @@ function buildDeterministicReview(
       processedMetrics.truePeak > -1
         ? `Lower the vocal trim in ${daw}.`
         : `Level-match the printed vocal in ${daw}.`,
+  };
+}
+
+function buildLevelDelta(
+  rawMetrics: AudioMetrics,
+  processedMetrics: LevelMetrics
+): LevelLabDelta {
+  const lufs_delta = Math.round((processedMetrics.lufs - rawMetrics.lufs) * 10) / 10;
+  const dynamic_range_delta =
+    Math.round((processedMetrics.dynamicRange - rawMetrics.dynamicRange) * 10) / 10;
+  const rawLufsDistance = Math.abs(rawMetrics.lufs - -14);
+  const processedLufsDistance = Math.abs(processedMetrics.lufs - -14);
+  const rawDynamicsDistance = Math.abs(rawMetrics.dynamicRange - 6);
+  const processedDynamicsDistance = Math.abs(processedMetrics.dynamicRange - 6);
+  const improved =
+    processedLufsDistance < rawLufsDistance - 0.5 ||
+    processedDynamicsDistance < rawDynamicsDistance - 0.5;
+  const regressed =
+    processedLufsDistance > rawLufsDistance + 0.5 ||
+    processedDynamicsDistance > rawDynamicsDistance + 0.5;
+
+  return {
+    verdict: improved && !regressed ? "improved" : regressed && !improved ? "regressed" : "unknown",
+    lufs_delta,
+    dynamic_range_delta,
   };
 }
 
@@ -319,6 +351,7 @@ export async function POST(req: NextRequest) {
     const response: LevelLabResponse = {
       ...result,
       processedMetrics,
+      delta: buildLevelDelta(rawMetrics, processedMetrics),
     };
 
     return NextResponse.json(response);

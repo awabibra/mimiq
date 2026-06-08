@@ -85,9 +85,9 @@ def compute_metrics(y: np.ndarray, sr: int) -> AudioMetrics:
     bot_10 = np.mean(sorted_db[:max(1, int(n * 0.1))])
     dynamic_range = round(float(top_10 - bot_10), 1)
 
-    # Spectral centroid (kHz)
+    # Spectral centroid (Hz)
     centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-    centroid_khz = round(float(np.mean(centroid)) / 1000, 2)
+    centroid_hz = round(float(np.mean(centroid)), 2)
 
     # Spectral flatness (tonality measure, 0=tonal, 1=noise)
     flatness = librosa.feature.spectral_flatness(y=y)[0]
@@ -102,7 +102,7 @@ def compute_metrics(y: np.ndarray, sr: int) -> AudioMetrics:
     return AudioMetrics(
         lufs=lufs,
         dynamic_range=dynamic_range,
-        spectral_centroid=centroid_khz,
+        spectral_centroid=centroid_hz,
         peak_db=peak_db,
         rms_db=rms_db,
         spectral_flatness=spec_flat,

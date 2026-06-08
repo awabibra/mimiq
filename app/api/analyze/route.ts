@@ -24,6 +24,14 @@ interface FastAPIAnalyzeResponse {
   frequency_collisions?: FastAPIMetrics[];
 }
 
+type AudioServiceStatus = "ok" | "fallback" | "error";
+
+interface AudioAnalysisResult {
+  metrics: AudioMetrics;
+  fallback_used: boolean;
+  audio_service_status: AudioServiceStatus;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Claude client — lazy singleton
    ═══════════════════════════════════════════════════════════════ */
@@ -266,7 +274,7 @@ function buildPrompt(
     "mastering_bus",
   ].filter(Boolean);
 
-  return `You are a professional mixing engineer specialising in ${genre}.
+  return `You are a technical mixing engineer specialising in ${genre}.
 
 Vocal metrics:
 - Integrated LUFS: ${round(metrics.lufs)} (target: ${profile.lufs_target})
@@ -1341,11 +1349,15 @@ async function analyzeAudio(
   beatFile: File | null,
   eraId: string,
   clientMetrics: Partial<AudioMetrics>
-): Promise<AudioMetrics> {
+): Promise<AudioAnalysisResult> {
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
   if (!serviceUrl) {
     console.warn("[analyze] Using client-side metrics fallback.");
-    return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+    return {
+      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      fallback_used: true,
+      audio_service_status: "fallback",
+    };
   }
 
   const form = new FormData();
@@ -1362,14 +1374,26 @@ async function analyzeAudio(
     if (!res.ok) {
       console.warn(`[analyze] Audio service returned ${res.status}.`);
       console.warn("[analyze] Using client-side metrics fallback.");
-      return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+      return {
+        metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+        fallback_used: true,
+        audio_service_status: "error",
+      };
     }
 
-    return transformAudioServiceResponse(await res.json());
+    return {
+      metrics: transformAudioServiceResponse(await res.json()),
+      fallback_used: false,
+      audio_service_status: "ok",
+    };
   } catch (error) {
     console.warn("[analyze] Audio service unavailable.", error);
     console.warn("[analyze] Using client-side metrics fallback.");
-    return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+    return {
+      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      fallback_used: true,
+      audio_service_status: "error",
+    };
   }
 }
 
@@ -1424,6 +1448,9 @@ export async function POST(req: NextRequest) {
         engineer_note: result.engineer_note,
         xyPosition: result.xyPosition,
         metrics,
+        analysis_version: "1.0",
+        fallback_used: false,
+        audio_service_status: "ok",
       });
     }
 
@@ -1459,7 +1486,8 @@ export async function POST(req: NextRequest) {
     }
 
     /* Call Python audio analysis service */
-    const metrics = await analyzeAudio(vocalFile, beatFile, eraId, clientMetrics);
+    const analysis = await analyzeAudio(vocalFile, beatFile, eraId, clientMetrics);
+    const { metrics } = analysis;
 
     /* Build prompt and call Claude */
     const prompt = buildPrompt(metrics, daw, eraId);
@@ -1476,6 +1504,9 @@ export async function POST(req: NextRequest) {
       engineer_note: result.engineer_note,
       xyPosition: result.xyPosition,
       metrics,
+      analysis_version: "1.0",
+      fallback_used: analysis.fallback_used,
+      audio_service_status: analysis.audio_service_status,
     });
   } catch (err) {
     console.error("[analyze] Unexpected error:", err);
