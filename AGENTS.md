@@ -4,7 +4,7 @@ This file is the permanent working contract for MimiQ. Every agent, script, and 
 
 ## Product Definition
 
-MimiQ is a technical assistant for vocal mixing and performance tracking tailored for modern rap artists.
+MimiQ is a serious studio-grade technical assistant for vocal mixing and performance tracking tailored for modern rap artists.
 
 The product should feel like a serious studio tool: fast, dark, quiet, precise, and built around the artist's current project rather than around generic dashboards or marketing pages.
 
