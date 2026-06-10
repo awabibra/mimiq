@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { AccountSettingsPanel } from "@/components/AccountSettingsPanel";
 import { eras, type Era } from "@/lib/eras";
 import { useAuth } from "@/lib/useAuth";
 import { useAudioStore } from "@/lib/useAudioStore";
@@ -9,7 +10,13 @@ import { useProject } from "@/lib/useProject";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
-  activePage: "sandbox" | "mix-room" | "level-lab" | "vault";
+  activePage:
+    | "sandbox"
+    | "mix-room"
+    | "level-lab"
+    | "stem-splitter"
+    | "vocal-diagnostics"
+    | "vault";
   activeEra: Era;
   onEraChange: (era: Era) => void;
   savedCount: number;
@@ -48,6 +55,29 @@ function ActivityIcon({ className }: { className?: string }) {
   );
 }
 
+function SplitIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 6h4a4 4 0 0 1 4 4v4a4 4 0 0 0 4 4h4" />
+      <path d="M16 14l4 4-4 4" />
+      <path d="M4 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 4-4h4" />
+      <path d="M16 2l4 4-4 4" />
+    </svg>
+  );
+}
+
+function TuneIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v13" />
+      <path d="M16 7l-4-4-4 4" />
+      <circle cx="12" cy="18" r="3" />
+      <path d="M4 12h3" />
+      <path d="M17 12h3" />
+    </svg>
+  );
+}
+
 function LayersIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -67,14 +97,28 @@ function LockIcon({ className }: { className?: string }) {
   );
 }
 
-function SignOutIcon({ className }: { className?: string }) {
+function displayNameFor(user: ReturnType<typeof useAuth.getState>["user"]) {
+  const metadata = user?.user_metadata as
+    | { full_name?: string; name?: string; display_name?: string }
+    | undefined;
+
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-      <polyline points="16 17 21 12 16 7" />
-      <line x1="21" y1="12" x2="9" y2="12" />
-    </svg>
+    metadata?.display_name ||
+    metadata?.full_name ||
+    metadata?.name ||
+    user?.email?.split("@")[0] ||
+    "Artist"
   );
+}
+
+function planFor(user: ReturnType<typeof useAuth.getState>["user"]) {
+  const metadata = {
+    ...(user?.app_metadata ?? {}),
+    ...(user?.user_metadata ?? {}),
+  } as { plan?: string; subscription?: string; tier?: string };
+  const plan = `${metadata.plan || metadata.subscription || metadata.tier || ""}`.toLowerCase();
+
+  return plan.includes("pro") ? "Pro Plan" : "Free";
 }
 
 export function Sidebar({
@@ -86,11 +130,12 @@ export function Sidebar({
 }: SidebarProps) {
   const [isHydrated, setIsHydrated] = useState(false);
   const [unlockStage, setUnlockStage] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const storeIsAnalyzed = useAudioStore((state) => state.isAnalyzed);
   const isAnalyzed = isHydrated ? storeIsAnalyzed : false;
   const activeProjectName = useProject((state) => state.project?.name);
-  const signOut = useAuth((state) => state.signOut);
+  const user = useAuth((state) => state.user);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => setIsHydrated(true));
@@ -127,6 +172,9 @@ export function Sidebar({
   const isMixRoomUnlocked = unlockStage >= 1;
   const isLevelLabUnlocked = unlockStage >= 2;
   const showGreenDot = unlockStage >= 1; // Unlocks immediately with Mix Room
+  const displayName = displayNameFor(user);
+  const plan = planFor(user);
+  const initial = displayName.trim().slice(0, 1).toUpperCase() || "A";
 
   return (
     <aside className={styles.sidebar}>
@@ -208,6 +256,32 @@ export function Sidebar({
         </div>
 
         <Link
+          href="/stem-splitter"
+          className={`${styles.navItem} ${
+            activePage === "stem-splitter" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "stem-splitter" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <SplitIcon className={styles.navIcon} />
+            Stem Splitter
+          </div>
+        </Link>
+
+        <Link
+          href="/vocal-diagnostics"
+          className={`${styles.navItem} ${
+            activePage === "vocal-diagnostics" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "vocal-diagnostics" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <TuneIcon className={styles.navIcon} />
+            Vocal Diagnostics
+          </div>
+        </Link>
+
+        <Link
           href="/vault"
           className={`${styles.navItem} ${
             activePage === "vault" ? styles.navItemActive : ""
@@ -250,16 +324,22 @@ export function Sidebar({
 
         <button
           type="button"
-          className={styles.navItem}
-          onClick={() => void signOut()}
-          aria-label="Sign out"
-          title="Sign out"
+          className={styles.profileArea}
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Open account settings"
         >
-          <div className={styles.navItemLeft}>
-            <SignOutIcon className={styles.navIcon} />
-          </div>
+          <span className={styles.profileAvatar}>{initial}</span>
+          <span className={styles.profileCopy}>
+            <span className={styles.profileName}>{displayName}</span>
+            <span className={styles.profilePlan}>{plan}</span>
+          </span>
         </button>
       </nav>
+
+      <AccountSettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
     </aside>
   );
 }

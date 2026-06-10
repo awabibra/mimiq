@@ -4,7 +4,7 @@ import Link from "next/link";
 import styles from "./MobileTabBar.module.css";
 
 interface MobileTabBarProps {
-  activePage: "sandbox" | "vault";
+  activePage: "sandbox" | "stem-splitter" | "vocal-diagnostics" | "vault";
 }
 
 /* ── Inline SVG icons ── */
@@ -43,6 +43,45 @@ function VaultIcon({ className }: { className?: string }) {
   );
 }
 
+function SplitIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 6h4a4 4 0 0 1 4 4v4a4 4 0 0 0 4 4h4" />
+      <path d="M16 14l4 4-4 4" />
+      <path d="M4 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 4-4h4" />
+      <path d="M16 2l4 4-4 4" />
+    </svg>
+  );
+}
+
+function TuneIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 3v13" />
+      <path d="M16 7l-4-4-4 4" />
+      <circle cx="12" cy="18" r="3" />
+      <path d="M4 12h3" />
+      <path d="M17 12h3" />
+    </svg>
+  );
+}
+
 function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -71,6 +110,24 @@ export function MobileTabBar({ activePage }: MobileTabBarProps) {
       >
         <SandboxIcon className={styles.mobileTabIcon} />
         <span>Sandbox</span>
+      </Link>
+      <Link
+        href="/stem-splitter"
+        className={`${styles.mobileTab} ${
+          activePage === "stem-splitter" ? styles.mobileTabActive : ""
+        }`}
+      >
+        <SplitIcon className={styles.mobileTabIcon} />
+        <span>Stems</span>
+      </Link>
+      <Link
+        href="/vocal-diagnostics"
+        className={`${styles.mobileTab} ${
+          activePage === "vocal-diagnostics" ? styles.mobileTabActive : ""
+        }`}
+      >
+        <TuneIcon className={styles.mobileTabIcon} />
+        <span>Tune</span>
       </Link>
       <Link
         href="/vault"
