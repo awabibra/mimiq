@@ -6,12 +6,18 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type FormEvent,
   type MouseEvent,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuthGate } from "@/components/AuthGate";
+import { Sidebar } from "@/components/Sidebar";
+import {
+  consumeEntryProjectsCache,
+  consumeEntryVisualHandoff,
+} from "@/lib/entryHandoff";
 import { getAuthSession } from "@/lib/auth";
 import {
   createProjectRecord,
@@ -19,13 +25,15 @@ import {
   saveProjectPatch,
   touchProject,
 } from "@/lib/projects";
-import type { Project } from "@/lib/types";
+import type { AudioServiceStatus, GeneratedChain, Project } from "@/lib/types";
 import {
   getCurrentVocal,
   getLatestGeneratedChain,
   useProject,
 } from "@/lib/useProject";
 import { useAudioStore } from "@/lib/useAudioStore";
+import { defaultEra, eras } from "@/lib/eras";
+import styles from "./page.module.css";
 
 function PlusIcon({ className }: { className?: string }) {
   return (
@@ -44,95 +52,34 @@ function PlusIcon({ className }: { className?: string }) {
   );
 }
 
-function Wordmark() {
+function SearchIcon({ className }: { className?: string }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-      className="fixed left-1/2 top-8 z-20 -translate-x-1/2 text-[14px] font-medium text-[#8e8e93] [letter-spacing:0]"
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
-      MimiQ
-    </motion.div>
+      <circle cx="7" cy="7" r="4.5" />
+      <line x1="10.5" y1="10.5" x2="14" y2="14" />
+    </svg>
   );
 }
 
-function BreathingWaveform() {
+function WaveformIcon({ className }: { className?: string }) {
   return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3, duration: 0.56, ease: [0.16, 1, 0.3, 1] }}
-        className="mimiq-projects-waveform"
-        aria-hidden="true"
-      >
-        <span />
-        <span />
-        <span />
-      </motion.div>
-      <style>{`
-        .mimiq-projects-waveform {
-          align-items: center;
-          animation: mimiq-projects-breathe 2s ease-in-out infinite alternate;
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          height: 54px;
-          justify-content: center;
-          margin: 0 auto;
-          transform-origin: center;
-          width: 176px;
-        }
-
-        .mimiq-projects-waveform span {
-          animation: mimiq-projects-line-breathe 2s ease-in-out infinite alternate;
-          background: rgba(215, 255, 63, 0.58);
-          border-radius: 999px;
-          display: block;
-          height: 2px;
-        }
-
-        .mimiq-projects-waveform span:nth-child(1) {
-          opacity: 0.38;
-          width: 112px;
-        }
-
-        .mimiq-projects-waveform span:nth-child(2) {
-          animation-delay: 120ms;
-          opacity: 0.62;
-          width: 176px;
-        }
-
-        .mimiq-projects-waveform span:nth-child(3) {
-          animation-delay: 240ms;
-          opacity: 0.34;
-          width: 88px;
-        }
-
-        @keyframes mimiq-projects-breathe {
-          from {
-            opacity: 0.5;
-            transform: scale(0.95);
-          }
-
-          to {
-            opacity: 1;
-            transform: scale(1.05);
-          }
-        }
-
-        @keyframes mimiq-projects-line-breathe {
-          from {
-            height: 2px;
-          }
-
-          to {
-            height: 4px;
-          }
-        }
-      `}</style>
-    </>
+    <svg className={className} viewBox="0 0 64 40" fill="none" aria-hidden="true">
+      <path
+        d="M3 20h7l4-12 6 24 7-30 8 36 7-24 5 6h14"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -144,9 +91,93 @@ const dateFormat = new Intl.DateTimeFormat("en-US", {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+type AnalysisProvenance = {
+  analysis_version: "1.0";
+  fallback_used: boolean;
+  audio_service_status: AudioServiceStatus;
+};
+
+const SAFE_ANALYSIS_PROVENANCE: AnalysisProvenance = {
+  analysis_version: "1.0",
+  fallback_used: true,
+  audio_service_status: "unknown",
+};
+
 function formatDate(value: string | null) {
   if (!value) return "Not opened yet";
   return dateFormat.format(new Date(value));
+}
+
+function hashString(value: string) {
+  return Array.from(value).reduce(
+    (hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0,
+    7
+  );
+}
+
+function artStyleForProject(project: Project, index: number) {
+  const seed = hashString(`${project.id}-${project.name}-${index}`);
+  const hueA = seed % 360;
+  const hueB = (hueA + 72 + (seed % 48)) % 360;
+  const hueC = (hueA + 164 + (seed % 38)) % 360;
+
+  return {
+    "--art-a": `hsl(${hueA} 78% 46%)`,
+    "--art-b": `hsl(${hueB} 86% 52%)`,
+    "--art-c": `hsl(${hueC} 68% 34%)`,
+    "--art-x": `${32 + (seed % 38)}%`,
+    "--art-y": `${26 + ((seed >> 4) % 42)}%`,
+  } as CSSProperties;
+}
+
+function getProjectArtUrl(project: Project) {
+  const visualProject = project as Project & {
+    fal_album_art_url?: string | null;
+    thumbnail_url?: string | null;
+    image_url?: string | null;
+  };
+
+  return (
+    visualProject.fal_album_art_url ??
+    visualProject.thumbnail_url ??
+    visualProject.image_url ??
+    null
+  );
+}
+
+function getProjectEra(project: Project) {
+  const latestChain = getLatestGeneratedChain(project);
+  const eraId = latestChain?.sandbox_settings?.era;
+  return (
+    eras.find((era) => era.id === eraId) ??
+    eras.find((era) => era.name === latestChain?.genre) ??
+    defaultEra
+  );
+}
+
+function getProjectLufs(project: Project) {
+  const lufs = getLatestGeneratedChain(project)?.chain_data.measurements?.lufs;
+  return typeof lufs === "number" ? `${lufs.toFixed(1)} LUFS` : "-- LUFS";
+}
+
+function isProjectReady(project: Project) {
+  return Boolean(getLatestGeneratedChain(project));
+}
+
+function provenanceFromChainData(
+  chainData?: GeneratedChain["chain_data"]
+): AnalysisProvenance {
+  if (!chainData) return SAFE_ANALYSIS_PROVENANCE;
+
+  return {
+    analysis_version: chainData.analysis_version ?? "1.0",
+    fallback_used:
+      typeof chainData.fallback_used === "boolean"
+        ? chainData.fallback_used
+        : SAFE_ANALYSIS_PROVENANCE.fallback_used,
+    audio_service_status:
+      chainData.audio_service_status ?? SAFE_ANALYSIS_PROVENANCE.audio_service_status,
+  };
 }
 
 function toAudioSession(project: Project) {
@@ -154,6 +185,7 @@ function toAudioSession(project: Project) {
   const latestChain = getLatestGeneratedChain(project);
   const chainData = latestChain?.chain_data;
   const xyPosition = chainData?.xyPosition ?? { x: 0.55, y: 0.62 };
+  const provenance = provenanceFromChainData(chainData);
 
   return {
     vocalFileUrl: vocal?.url ?? null,
@@ -164,6 +196,9 @@ function toAudioSession(project: Project) {
           summary: chainData.summary,
           metrics: chainData.measurements,
           xyPosition,
+          analysis_version: provenance.analysis_version,
+          fallback_used: provenance.fallback_used,
+          audio_service_status: provenance.audio_service_status,
         }
       : null,
     processedAnalysis: project.level_lab_report,
@@ -180,17 +215,22 @@ function ProjectsInner() {
   const setPrompt = useProject((state) => state.setPrompt);
   const setSession = useAudioStore((state) => state.setSession);
   const clearSession = useAudioStore((state) => state.clearSession);
+  const [initialProjects] = useState(() => consumeEntryProjectsCache());
+  const [entryReveal] = useState(() => consumeEntryVisualHandoff());
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [projects, setProjects] = useState<Project[]>(() => initialProjects ?? []);
+  const [loading, setLoading] = useState(() => initialProjects === null);
   const [modalOpen, setModalOpen] = useState(false);
   const [name, setName] = useState("");
   const [beatName, setBeatName] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [exiting, setExiting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [selectedEraId, setSelectedEraId] = useState(defaultEra.id);
 
   const routePrompt = searchParams.get("prompt");
+  const revealDelay = entryReveal ? 0.22 : 0;
   const subtlePrompt = useMemo(() => {
     if (projectPrompt) return projectPrompt;
     if (routePrompt === "select-project") {
@@ -199,6 +239,21 @@ function ProjectsInner() {
     return null;
   }, [projectPrompt, routePrompt]);
   const headerSubtext = subtlePrompt ?? "Select or create a session to continue.";
+  const activeSidebarEra =
+    eras.find((era) => era.id === selectedEraId) ?? defaultEra;
+  const filteredProjects = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return projects;
+
+    return projects.filter((project) => {
+      const era = getProjectEra(project).name.toLowerCase();
+      return (
+        project.name.toLowerCase().includes(normalized) ||
+        (project.beat_filename ?? "").toLowerCase().includes(normalized) ||
+        era.includes(normalized)
+      );
+    });
+  }, [projects, query]);
 
   useEffect(() => {
     let alive = true;
@@ -299,6 +354,7 @@ function ProjectsInner() {
   const openModal = useCallback(() => {
     setName("");
     setBeatName("");
+    setSelectedEraId(defaultEra.id);
     setModalOpen(true);
   }, []);
 
@@ -310,239 +366,258 @@ function ProjectsInner() {
     event.stopPropagation();
   };
 
+  const setMagneticPosition = (event: MouseEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+    event.currentTarget.style.setProperty("--my", `${event.clientY - rect.top}px`);
+  };
+
   return (
     <motion.main
-      className="relative flex min-h-screen flex-col items-center justify-center overflow-x-hidden bg-[#050505] px-6 py-24 text-[#f5f5f7] sm:px-8"
-      style={
-        {
-          "--accent": "#d7ff3f",
-          fontFamily: "var(--font-body)",
-          WebkitFontSmoothing: "antialiased",
-          MozOsxFontSmoothing: "grayscale",
-          textRendering: "optimizeLegibility",
-        } as React.CSSProperties
-      }
+      className={styles.shell}
       animate={exiting ? { opacity: 0, y: -18 } : { opacity: 1, y: 0 }}
       transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
     >
-      <Wordmark />
+      {entryReveal && (
+        <motion.div
+          className={styles.entryVeil}
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{
+            delay: 0.04,
+            duration: 0.84,
+            ease: [0.16, 1, 0.3, 1],
+          }}
+        />
+      )}
 
-      <section className="relative z-10 flex w-full flex-1 -translate-y-[5%] flex-col items-center justify-center text-center">
-        <div className="mx-auto flex w-full max-w-[480px] flex-col items-center">
-          <motion.h1
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{
-              delay: 0.15,
-              duration: 0.62,
-              ease: [0.16, 1, 0.3, 1],
-            }}
-            className="text-[48px] font-medium leading-none text-white [letter-spacing:0]"
-          >
-            Your sessions.
-          </motion.h1>
+      <Sidebar
+        activePage="projects"
+        activeEra={activeSidebarEra}
+        onEraChange={(era) => setSelectedEraId(era.id)}
+        savedCount={0}
+      />
 
-          <motion.p
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{
-              delay: 0.24,
-              duration: 0.52,
-              ease: [0.16, 1, 0.3, 1],
-            }}
-            className="mt-3 text-[14px] leading-6 text-[#8e8e93] [letter-spacing:0]"
-          >
-            {headerSubtext}
-          </motion.p>
+      <section className={styles.workspace}>
+        <motion.header
+          className={styles.topBar}
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            delay: revealDelay + 0.08,
+            duration: 0.42,
+            ease: [0.25, 0.46, 0.45, 0.94],
+          }}
+        >
+          <div className={styles.headerCopy}>
+            <h1>Your projects.</h1>
+            <p>{headerSubtext}</p>
+          </div>
 
-          {loading && (
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3, duration: 0.56, ease: [0.16, 1, 0.3, 1] }}
-              className="mt-16 grid w-full grid-cols-1 gap-4"
+          <div className={styles.headerActions}>
+            <label className={styles.searchBox}>
+              <SearchIcon className={styles.searchIcon} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search sessions"
+                aria-label="Search sessions"
+              />
+            </label>
+            <motion.button
+              type="button"
+              className={styles.newSessionButton}
+              onClick={openModal}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              transition={{ duration: 0.15, ease: [0.25, 0.46, 0.45, 0.94] }}
             >
-              {[0, 1, 2].map((item) => (
-                <div
+              <PlusIcon className={styles.buttonIcon} />
+              New Session
+            </motion.button>
+          </div>
+        </motion.header>
+
+        <section className={styles.gridRegion}>
+          {loading && (
+            <div className={styles.projectGrid}>
+              {[0, 1, 2, 3, 4, 5].map((item) => (
+                <motion.div
                   key={item}
-                  className="h-20 animate-pulse rounded-[12px] border border-[#242424] bg-white/[0.025]"
+                  className={styles.cardSkeleton}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{
+                    delay: revealDelay + item * 0.06,
+                    duration: 0.4,
+                    ease: [0.25, 0.46, 0.45, 0.94],
+                  }}
                 />
               ))}
+            </div>
+          )}
+
+          {!loading && filteredProjects.length === 0 && (
+            <motion.div
+              className={styles.emptyState}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{
+                delay: revealDelay + 0.12,
+                duration: 0.4,
+                ease: [0.25, 0.46, 0.45, 0.94],
+              }}
+            >
+              <WaveformIcon className={styles.emptyIcon} />
+              <h2>No sessions yet.</h2>
+              <p>Create one to start building your sound.</p>
+              <motion.button
+                type="button"
+                className={styles.emptyButton}
+                onClick={openModal}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                transition={{ duration: 0.15, ease: [0.25, 0.46, 0.45, 0.94] }}
+              >
+                <PlusIcon className={styles.buttonIcon} />
+                New Session
+              </motion.button>
             </motion.div>
           )}
 
-          {!loading && projects.length === 0 && (
-            <>
-              <div className="mt-12">
-                <BreathingWaveform />
-              </div>
-
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4, duration: 0.52, ease: [0.16, 1, 0.3, 1] }}
-                className="mt-10 grid gap-2"
-              >
-                <h2 className="text-[16px] font-medium text-white [letter-spacing:0]">
-                  No sessions yet.
-                </h2>
-                <p className="text-[14px] leading-6 text-[#8e8e93] [letter-spacing:0]">
-                  Create one and MimiQ tracks everything.
-                </p>
-              </motion.div>
-
-              <motion.button
-                type="button"
-                onClick={openModal}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5, duration: 0.52, ease: [0.16, 1, 0.3, 1] }}
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                className="mt-8 inline-flex items-center justify-center gap-2 rounded-full border border-[#d7ff3f] bg-[#d7ff3f] px-8 py-4 text-[15px] font-medium text-[#050505] shadow-[0_18px_70px_rgba(215,255,63,0.15)]"
-              >
-                <PlusIcon className="h-4 w-4" />
-                New Session
-              </motion.button>
-            </>
-          )}
-        </div>
-
-        {!loading && projects.length > 0 && (
-          <>
+          {!loading && filteredProjects.length > 0 && (
             <motion.div
-              className="mt-16 grid w-full max-w-6xl grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"
+              className={styles.projectGrid}
               initial="hidden"
               animate="show"
-              variants={{
-                hidden: {},
-                show: {
-                  transition: {
-                    staggerChildren: 0.08,
-                    delayChildren: 0.3,
-                  },
-                },
-              }}
             >
-              {projects.map((project) => {
+              {filteredProjects.map((project, index) => {
                 const selected = selectedProjectId === project.id;
+                const era = getProjectEra(project);
+                const ready = isProjectReady(project);
+                const artUrl = getProjectArtUrl(project);
+                const latestChain = getLatestGeneratedChain(project);
+
                 return (
-                  <motion.button
+                  <motion.article
                     key={project.id}
-                    type="button"
-                    onClick={() => openProject(project)}
-                    className="group relative min-h-[300px] overflow-hidden rounded-[18px] border border-[#242424] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.016))] p-6 text-left shadow-[0_22px_80px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.07)] outline-none"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ${project.name}`}
+                    className={`${styles.projectCard} ${selected ? styles.projectCardSelected : ""}`}
+                    custom={index}
                     variants={{
                       hidden: { opacity: 0, y: 20 },
-                      show: {
+                      show: (itemIndex: number) => ({
                         opacity: 1,
                         y: 0,
-                        transition: { duration: 0.58, ease: [0.16, 1, 0.3, 1] },
-                      },
+                        transition: {
+                          delay: revealDelay + itemIndex * 0.06,
+                          duration: 0.4,
+                          ease: [0.25, 0.46, 0.45, 0.94],
+                        },
+                      }),
                     }}
-                    animate={
-                      selected
-                        ? {
-                            scale: [1, 1.02, 0.985],
-                            borderColor: ["#242424", "#d7ff3f", "#d7ff3f"],
-                          }
-                        : undefined
-                    }
-                    whileHover={{
-                      scale: 1.02,
-                      borderColor: "rgba(255,255,255,0.18)",
-                      boxShadow:
-                        "0 32px 100px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.1)",
+                    whileHover={{ y: -4, scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    transition={{ duration: 0.15, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    onMouseMove={setMagneticPosition}
+                    onClick={() => openProject(project)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void openProject(project);
+                      }
                     }}
-                    whileTap={{ scale: 0.985 }}
-                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                   >
-                    <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/[0.14]" />
-                    <div className="flex h-full flex-col justify-between gap-12">
-                      <div className="grid gap-3">
-                        <p className="text-[12px] text-[#737378] [letter-spacing:0]">
-                          Last opened {formatDate(project.last_opened_at)}
-                        </p>
-                        <h2 className="text-[28px] font-semibold leading-tight [letter-spacing:0]">
-                          {project.name}
-                        </h2>
+                    <div className={styles.artwork} style={artStyleForProject(project, index)}>
+                      <div
+                        className={`${styles.artworkInner} ${artUrl ? styles.artworkImage : styles.artworkPlaceholder}`}
+                        style={artUrl ? { backgroundImage: `url("${artUrl}")` } : undefined}
+                      />
+                      <div className={styles.artworkShade} />
+                      <span
+                        className={`${styles.statusDot} ${ready ? styles.statusReady : styles.statusProgress}`}
+                        title={ready ? "Ready" : "In Progress"}
+                      />
+                      <button
+                        type="button"
+                        className={styles.cardMenu}
+                        aria-label="Project actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        ...
+                      </button>
+                    </div>
+
+                    <div className={styles.cardBody}>
+                      <div>
+                        <h2>{project.name}</h2>
+                        <div className={styles.eraPill}>
+                          <span />
+                          {era.name}
+                        </div>
                       </div>
 
-                      <div className="grid gap-4">
-                        <div className="text-[13px] leading-5 text-[#9a9a9f]">
-                          {project.beat_filename ?? "No beat yet"}
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-4">
-                          <div>
-                            <div className="text-[22px] font-semibold [letter-spacing:0]">
-                              {project.vocal_versions.length}
-                            </div>
-                            <div className="mt-1 text-[12px] text-[#737378]">
-                              vocals
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[22px] font-semibold [letter-spacing:0]">
-                              {project.generated_chains.length}
-                            </div>
-                            <div className="mt-1 text-[12px] text-[#737378]">
-                              chains
-                            </div>
-                          </div>
-                        </div>
+                      <div className={styles.cardStats}>
+                        <span>{project.vocal_versions.length} vocals</span>
+                        <span>{project.generated_chains.length} chains</span>
+                        <strong>{getProjectLufs(project)}</strong>
+                      </div>
+
+                      <div className={styles.cardFooter}>
+                        <span>{latestChain?.daw ?? project.beat_filename ?? "No beat yet"}</span>
+                        <time>{formatDate(project.last_opened_at)}</time>
                       </div>
                     </div>
-                  </motion.button>
+                  </motion.article>
                 );
               })}
             </motion.div>
-
-            <motion.button
-              type="button"
-              onClick={openModal}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5, duration: 0.52, ease: [0.16, 1, 0.3, 1] }}
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              className="mt-8 inline-flex items-center justify-center gap-2 rounded-full border border-[#d7ff3f] bg-[#d7ff3f] px-8 py-4 text-[15px] font-medium text-[#050505] shadow-[0_18px_70px_rgba(215,255,63,0.15)]"
-            >
-              <PlusIcon className="h-4 w-4" />
-              New Session
-            </motion.button>
-          </>
-        )}
+          )}
+        </section>
       </section>
 
       <AnimatePresence>
         {modalOpen && (
           <motion.div
-            className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[16px]"
+            className={styles.modalBackdrop}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.22 }}
+            transition={{ duration: 0.2 }}
             onMouseDown={closeModal}
           >
             <motion.form
+              className={styles.modalCard}
               onMouseDown={stopModalClick}
               onSubmit={createProject}
-              className="grid w-full max-w-[420px] gap-5 rounded-[24px] border border-white/[0.09] bg-white/[0.03] p-6 shadow-[0_32px_100px_rgba(0,0,0,0.62),inset_0_1px_0_rgba(255,255,255,0.08)]"
-              initial={{ opacity: 0, y: 18, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 12, scale: 0.98 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{
+                type: "spring",
+                stiffness: 420,
+                damping: 32,
+                mass: 0.8,
+                duration: 0.25,
+              }}
             >
-              <div className="grid gap-2">
-                <h2 className="text-[22px] font-semibold [letter-spacing:0]">
-                  New session
-                </h2>
-                <p className="text-[14px] leading-6 text-[#9a9a9f]">
-                  Name the project window MimiQ should remember.
-                </p>
+              <button
+                type="button"
+                className={styles.modalClose}
+                onClick={closeModal}
+                aria-label="Close new session"
+              >
+                X
+              </button>
+
+              <div className={styles.modalHeader}>
+                <h2>New session</h2>
+                <p>Name the project window MimiQ should remember.</p>
               </div>
 
-              <label className="grid gap-2 text-[12px] font-medium text-[#8e8e93]">
+              <label className={styles.fieldLabel}>
                 Session name
                 <input
                   value={name}
@@ -550,38 +625,49 @@ function ProjectsInner() {
                   autoFocus
                   required
                   maxLength={80}
-                  className="h-12 rounded-[14px] border border-white/[0.09] bg-black/55 px-4 text-[15px] font-normal text-[#f5f5f7] outline-none transition duration-200 placeholder:text-[#4d4d52] focus:border-white/[0.18]"
                   placeholder="Midnight demo"
                 />
               </label>
 
-              <label className="grid gap-2 text-[12px] font-medium text-[#8e8e93]">
+              <label className={styles.fieldLabel}>
                 Beat name
                 <input
                   value={beatName}
                   onChange={(event) => setBeatName(event.target.value)}
                   maxLength={100}
-                  className="h-12 rounded-[14px] border border-white/[0.09] bg-black/55 px-4 text-[15px] font-normal text-[#f5f5f7] outline-none transition duration-200 placeholder:text-[#4d4d52] focus:border-white/[0.18]"
                   placeholder="Optional"
                 />
               </label>
 
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="h-10 rounded-full border border-white/[0.09] bg-transparent px-4 text-[13px] font-medium text-[#b8b8bd] transition duration-200 hover:text-white"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy || !name.trim()}
-                  className="h-10 rounded-full border border-[#d7ff3f] bg-[#d7ff3f] px-5 text-[13px] font-semibold text-[#050505] transition duration-200 disabled:cursor-default disabled:opacity-45"
-                >
-                  {busy ? "Creating" : "Create"}
-                </button>
+              <div className={styles.eraSelector}>
+                <span>Vibe</span>
+                <div className={styles.eraGrid}>
+                  {eras.map((era) => (
+                    <button
+                      key={era.id}
+                      type="button"
+                      className={`${styles.eraOption} ${
+                        selectedEraId === era.id ? styles.eraOptionActive : ""
+                      }`}
+                      onClick={() => setSelectedEraId(era.id)}
+                    >
+                      <span />
+                      {era.name}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              <motion.button
+                type="submit"
+                className={styles.confirmButton}
+                disabled={busy || !name.trim()}
+                whileHover={{ scale: busy || !name.trim() ? 1 : 1.02 }}
+                whileTap={{ scale: busy || !name.trim() ? 1 : 0.97 }}
+                transition={{ duration: 0.15, ease: [0.25, 0.46, 0.45, 0.94] }}
+              >
+                {busy ? "Creating" : "Create Session"}
+              </motion.button>
             </motion.form>
           </motion.div>
         )}
@@ -592,7 +678,7 @@ function ProjectsInner() {
 
 export default function ProjectsPage() {
   return (
-    <AuthGate>
+    <AuthGate allowEntryHandoff>
       <Suspense
         fallback={
           <div className="grid min-h-screen place-items-center bg-[#050505] text-[13px] text-[#8e8e93]">

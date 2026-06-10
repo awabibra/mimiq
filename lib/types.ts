@@ -8,6 +8,12 @@ export interface AudioMetrics {
   dynamicRange: number;
   spectralCentroid: number;
   truePeak?: number;
+  sibilanceEnergy?: number;
+  harshness?: number;
+  lowMidBuildup?: number;
+  noiseFloorDb?: number;
+  truePeakEstimateDb?: number;
+  crestFactorDb?: number;
   reverbDecay?: number;
   sibilancePeak?: number;
   pitchVariance?: number;
@@ -56,7 +62,12 @@ export interface AnalysisResponse {
   engineer_note?: string;
   xyPosition: XYPosition;
   metrics: AudioMetrics;
+  analysis_version: "1.0";
+  fallback_used: boolean;
+  audio_service_status: AudioServiceStatus;
 }
+
+export type AudioServiceStatus = "ok" | "fallback" | "error" | "unknown";
 
 /** Full structured response from Claude / the level-lab route. */
 export interface LevelLabResponse {
@@ -66,7 +77,13 @@ export interface LevelLabResponse {
   brightnessVerdict: string;
   gainRideCallout: string;
   nextStep: string;
+  deltaSummary?: string;
+  rawMetrics?: LevelMetrics;
   processedMetrics: LevelMetrics;
+  delta: LevelLabDelta;
+  audio_service_status?: AudioServiceStatus;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
 }
 
 export interface LevelMetrics {
@@ -75,6 +92,13 @@ export interface LevelMetrics {
   truePeak: number;
   gainRide: number[];
   spectralCentroid?: number;
+}
+
+export interface LevelLabDelta {
+  verdict: "improved" | "regressed" | "unknown";
+  lufs_delta: number;
+  dynamic_range_delta: number;
+  brightness_delta?: number;
 }
 
 /** Error response from the analyze route. */
@@ -97,8 +121,9 @@ export interface EvaluationResult {
   overall: string;
   issues: EvaluationIssue[];
   strengths: string[];
-  verdict: "needs_work" | "good" | "professional";
-  verdict_reason: string;
+  measured_fit: "good" | "needs_work" | "unknown";
+  flags: string[];
+  explanation: string;
 }
 
 /** A saved chain record from the Supabase `chains` table. */
@@ -131,7 +156,10 @@ export interface GeneratedChain {
     engineer_note?: string;
     measurements?: AudioMetrics;
     xyPosition?: XYPosition;
-    validated?: boolean;
+    analysis_version?: "1.0";
+    fallback_used?: boolean;
+    audio_service_status?: AudioServiceStatus;
+    measured_fit?: EvaluationResult["measured_fit"];
     validation_timestamp?: string;
     iteration_count?: number;
     evaluation_summary?: string;
@@ -191,7 +219,7 @@ export interface MixRoomEQCut {
 
 export interface MixRoomReport {
   version?: 1;
-  analysis_version?: "browser_fft_v1";
+  analysis_version?: "browser_fft_v1" | "mix_room_v1";
   analyzed_at?: string;
   vocal_version_id?: string | null;
   beat_file_url?: string | null;
@@ -205,6 +233,9 @@ export interface MixRoomReport {
   collisions?: CollisionZone[];
   pockets?: PocketZone[];
   eq_cuts?: MixRoomEQCut[];
+  audio_service_status?: AudioServiceStatus;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
 }
 
 export interface Project {

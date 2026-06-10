@@ -26,6 +26,12 @@ class AudioMetrics(BaseModel):
     spectral_flatness: float
     zero_crossing_rate: float
     duration: float
+    sibilance_energy: float
+    harshness: float
+    low_mid_buildup: float
+    noise_floor_db: float
+    true_peak_estimate_db: float
+    crest_factor_db: float
 
 class AnalysisResponse(BaseModel):
     vocal: AudioMetrics
@@ -71,23 +77,37 @@ def compute_metrics(y: np.ndarray, sr: int) -> AudioMetrics:
     # Peak dB
     peak = np.max(np.abs(y))
     peak_db = round(float(20 * np.log10(peak + 1e-10)), 1)
+    true_peak_estimate_db = round(float(20 * np.log10(peak + 1e-9)), 1)
 
     # RMS dB
     rms = np.sqrt(np.mean(y ** 2))
     rms_db = round(float(20 * np.log10(rms + 1e-10)), 1)
+    crest_factor_db = round(float(true_peak_estimate_db - rms_db), 1)
 
     # Dynamic range: difference between loud and quiet sections
     frame_rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
     frame_db = 20 * np.log10(frame_rms + 1e-10)
+    noise_floor_db = round(float(np.percentile(frame_db, 10)), 1)
     sorted_db = np.sort(frame_db)
     n = len(sorted_db)
     top_10 = np.mean(sorted_db[int(n * 0.9):]) if n > 10 else sorted_db[-1]
     bot_10 = np.mean(sorted_db[:max(1, int(n * 0.1))])
     dynamic_range = round(float(top_10 - bot_10), 1)
 
-    # Spectral centroid (kHz)
+    # Mean spectral power in vocal problem bands
+    n_fft = 2048
+    power = np.abs(librosa.stft(y=y, n_fft=n_fft, hop_length=512)) ** 2
+    frequencies = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    def band_energy(low_hz: float, high_hz: float) -> float:
+        band = power[(frequencies >= low_hz) & (frequencies <= high_hz)]
+        if band.size == 0:
+            return 0.0
+        return round(float(np.mean(band)), 6)
+
+    # Spectral centroid (Hz)
     centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-    centroid_khz = round(float(np.mean(centroid)) / 1000, 2)
+    centroid_hz = round(float(np.mean(centroid)), 2)
 
     # Spectral flatness (tonality measure, 0=tonal, 1=noise)
     flatness = librosa.feature.spectral_flatness(y=y)[0]
@@ -102,29 +122,35 @@ def compute_metrics(y: np.ndarray, sr: int) -> AudioMetrics:
     return AudioMetrics(
         lufs=lufs,
         dynamic_range=dynamic_range,
-        spectral_centroid=centroid_khz,
+        spectral_centroid=centroid_hz,
         peak_db=peak_db,
         rms_db=rms_db,
         spectral_flatness=spec_flat,
         zero_crossing_rate=zcr_mean,
         duration=duration,
+        sibilance_energy=band_energy(5000, 10000),
+        harshness=band_energy(2000, 5000),
+        low_mid_buildup=band_energy(200, 500),
+        noise_floor_db=noise_floor_db,
+        true_peak_estimate_db=true_peak_estimate_db,
+        crest_factor_db=crest_factor_db,
     )
 
 def detect_collisions(vocal: AudioMetrics, beat: AudioMetrics) -> list[dict]:
     collisions = []
     # Spectral centroid proximity (both in similar frequency zone)
     diff = abs(vocal.spectral_centroid - beat.spectral_centroid)
-    if diff < 0.8:
-        severity = "HIGH" if diff < 0.3 else "MED"
+    if diff < 800:
+        severity = "HIGH" if diff < 300 else "MED"
         collisions.append({
-            "zone": f"{vocal.spectral_centroid:.1f}kHz",
+            "zone": f"{vocal.spectral_centroid / 1000:.1f}kHz",
             "severity": severity,
             "description": "Vocal and beat centroids overlap — carve a notch in the beat at this frequency",
             "vocal_centroid": vocal.spectral_centroid,
             "beat_centroid": beat.spectral_centroid,
         })
     # Low-mid muddiness: both signals loud in low-mids
-    if vocal.lufs > -20 and beat.lufs > -16 and vocal.spectral_centroid < 2.0:
+    if vocal.lufs > -20 and beat.lufs > -16 and vocal.spectral_centroid < 2000:
         collisions.append({
             "zone": "200–400Hz",
             "severity": "MED",

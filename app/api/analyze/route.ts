@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import type { AudioMetrics, ChainStep, XYPosition } from "@/lib/types";
+import type {
+  AudioMetrics,
+  AudioServiceStatus,
+  ChainStep,
+  XYPosition,
+} from "@/lib/types";
 import {
   GENRE_PROFILES,
   getGenreName,
@@ -22,6 +27,18 @@ interface FastAPIAnalyzeResponse {
   vocal?: FastAPIMetrics | null;
   beat?: FastAPIMetrics | null;
   frequency_collisions?: FastAPIMetrics[];
+}
+
+interface AudioAnalysisResult {
+  metrics: AudioMetrics;
+  fallback_used: boolean;
+  audio_service_status: AudioServiceStatus;
+}
+
+interface CachedMetricsPayload extends Partial<AudioMetrics> {
+  analysis_version?: unknown;
+  fallback_used?: unknown;
+  audio_service_status?: unknown;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -208,7 +225,21 @@ interface ClaudeChainResponse {
   engineer_note: string;
 }
 
-const SYSTEM_PROMPT = `You are a JSON-only API endpoint. Return ONLY valid JSON and absolutely nothing else. Do not include markdown, code fences, explanations, prose, or extra keys.`;
+const SYSTEM_PROMPT =
+  "Return only concise explanation text. Do not return JSON, chain settings, plugin parameter values, verdicts, or scores.";
+
+function readAudioServiceStatus(value: unknown): AudioServiceStatus {
+  return value === "ok" ||
+    value === "fallback" ||
+    value === "error" ||
+    value === "unknown"
+    ? value
+    : "unknown";
+}
+
+function readFallbackUsed(value: unknown) {
+  return typeof value === "boolean" ? value : true;
+}
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -241,8 +272,6 @@ function buildPrompt(
   const dawName = getDawName(daw);
   const genre = getGenreName(eraId);
   const profile = GENRE_PROFILES[genre];
-  const plugins = DAW_PLUGINS[dawName];
-  const primaryPlugin = primaryCompressorPlugin(profile, plugins);
   const lufsDelta = metrics.lufs - profile.lufs_target;
   const dynamicRangeDelta = metrics.dynamicRange - profile.dynamic_range_target;
   const truePeak = metrics.truePeak ?? "unknown";
@@ -256,17 +285,8 @@ function buildPrompt(
       : metrics.spectralCentroid > 3000
         ? "bright (above 3kHz), reduce air EQ boost"
         : "balanced, keep profile EQ close to baseline";
-  const expectedBuses = [
-    "reverb_bus",
-    "delay_bus",
-    profile.buses.parallel_comp ? "parallel_comp_bus" : null,
-    profile.buses.width ? "width_bus" : null,
-    profile.buses.saturation_bus ? "saturation_bus" : null,
-    profile.buses.distortion_bus ? "distortion_bus" : null,
-    "mastering_bus",
-  ].filter(Boolean);
 
-  return `You are a professional mixing engineer specialising in ${genre}.
+  return `You are a technical vocal mixing assistant specializing in ${genre}.
 
 Vocal metrics:
 - Integrated LUFS: ${round(metrics.lufs)} (target: ${profile.lufs_target})
@@ -277,109 +297,13 @@ Vocal metrics:
 - Dry/wet preference: ${xyX == null ? "profile default" : round(xyX, 2)} (0 = dry, 1 = wet)
 - Dark/bright preference: ${xyY == null ? "profile default" : round(xyY, 2)} (0 = dark, 1 = bright)
 
-The genre profile baseline is:
-${JSON.stringify(profile, null, 2)}
+Deterministic context:
+- MimiQ calculates every gate, high-pass, compressor, EQ, de-esser, saturation, bus, and limiter setting locally from the measured metrics and the ${dawName} profile.
+- The loudness rule is: the vocal is ${lufsRule} the target.
+- The dynamics rule is: the vocal is ${dynamicRangeDelta > 0 ? "wider than target" : "tighter than target"}.
+- The brightness rule is: ${brightnessRule}.
 
-The DAW is ${dawName}. Plugin names to use:
-${JSON.stringify(plugins, null, 2)}
-
-Your job: adjust the baseline profile values based on THIS specific vocal's measurements.
-
-Rules:
-- If LUFS is ${lufsRule} target, adjust compression threshold and gain accordingly.
-- If dynamic range is ${dynamicRangeDelta > 0 ? "wider than target" : "tighter than target"}, ${dynamicRangeDelta > 0 ? "increase ratio" : "decrease ratio or keep gentle"}.
-- If sibilance peak ${Number(metrics.sibilancePeak ?? -12) > -12 ? "is high (above -12dBFS)" : "is controlled"}, ${Number(metrics.sibilancePeak ?? -12) > -12 ? "increase de-esser reduction" : "keep de-esser close to profile"}.
-- If spectral centroid is ${brightnessRule}.
-- Keep bus structure exactly as defined in the genre profile. Use these bus keys only: ${JSON.stringify(expectedBuses)}.
-- Only change values that the vocal measurements or XY preference justify changing.
-- Every plugin value must match the DAW plugin map exactly.
-- engineer_note must be one sentence and reference at least one exact metric value above.
-
-Return ONLY this JSON structure, no explanation:
-{
-  "main_chain": {
-    "gate": { "threshold_db": number, "attack_ms": number, "release_ms": number, "plugin": "${plugins.gate}" },
-    "highpass": { "frequency_hz": number, "slope": "12dB/oct"|"24dB/oct", "plugin": "${plugins.highpass}" },
-    "subtractive_eq": { "cuts": [{ "frequency_hz": number, "gain_db": number, "q": number }], "plugin": "${plugins.subtractive_eq}" },
-    "compressor_primary": { "style": "${profile.compression.primary.style}", "ratio": string, "attack_ms": number, "release_ms": number, "threshold_db": number, "gain_reduction_db": number, "plugin": "${primaryPlugin}" },
-    "compressor_secondary": { "settings": string, "plugin": "${plugins.compressor_secondary}" },
-    "additive_eq": { "boosts": [{ "frequency_hz": number, "gain_db": number, "q": number, "type": "bell"|"shelf" }], "plugin": "${plugins.additive_eq}" },
-    "deesser": { "frequency_hz": number, "reduction_db": number, "plugin": "${plugins.deesser}" },
-    "saturation": { "drive": number, "mix_percent": number, "plugin": "${plugins.saturation}" }
-  },
-  "buses": {
-    "reverb_bus": {
-      "reverb": { "decay_s": number, "pre_delay_ms": number, "mix_percent": number, "plugin": "${plugins.reverb_bus_reverb}" },
-      "compressor": { "sidechained_to_dry_vocal": true, "threshold_db": number, "ratio": "4:1", "plugin": "${plugins.reverb_bus_comp}", "note": "Sidechain to dry vocal so reverb ducks when artist raps" }
-    },
-    "delay_bus": { "time": string, "feedback_percent": number, "mix_percent": number, "automated_on_phrase_endings": boolean, "plugin": "${plugins.delay_bus}" },
-    "parallel_comp_bus": { "ratio": string, "attack_ms": number, "threshold_db": -30, "blend_percent": number, "plugin": "${plugins.parallel_comp_bus}", "note": "Blend in parallel for density without losing dynamics" },
-    "width_bus": { "amount_percent": number, "plugin": "${plugins.width_bus}" },
-    "saturation_bus": { "style": string, "mix_percent": number, "plugin": "${plugins.saturation_bus}" },
-    "distortion_bus": { "style": string, "blend_percent": number, "plugin": "${plugins.saturation_bus}" },
-    "mastering_bus": {
-      "bus_comp": { "ratio": string, "attack_ms": number, "release_ms": number, "gain_reduction_db": number, "plugin": "${plugins.mastering_bus_comp}" },
-      "limiter": { "ceiling_db": number, "plugin": "${plugins.mastering_limiter}" }
-    }
-  },
-  "engineer_note": "One sentence explaining the key mixing decision for this specific vocal using at least one exact metric value"
-}`;
-}
-
-function cleanClaudeJson(raw: string) {
-  let cleaned = raw.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/```\s*$/, "");
-  }
-  return cleaned;
-}
-
-function parseClaudeResponse(raw: string): Partial<ChainPayload> | null {
-  try {
-    const parsed = JSON.parse(cleanClaudeJson(raw)) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-
-    const value = parsed as Partial<ChainPayload>;
-    if (!value.main_chain || !value.buses) return null;
-
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function num(
-  source: Record<string, unknown>,
-  key: string,
-  fallback: number,
-  min: number,
-  max: number,
-  digits = 1
-) {
-  const value = source[key];
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number(value)
-        : Number.NaN;
-
-  return round(clamp(Number.isFinite(parsed) ? parsed : fallback, min, max), digits);
-}
-
-function text(source: Record<string, unknown>, key: string, fallback: string) {
-  const value = source[key];
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : fallback;
+Respond with explanation text only, no JSON parameter values. Write one concise sentence explaining why the deterministic chain direction makes sense for this measured vocal.`;
 }
 
 function ratioValue(ratio: string) {
@@ -396,36 +320,6 @@ function adjustRatio(base: string, dynamicDelta: number) {
   const adjusted = clamp(ratio + dynamicDelta * 0.35, 1, 10);
   const rounded = round(adjusted, Number.isInteger(adjusted) ? 0 : 1);
   return `${rounded}:1`;
-}
-
-function eqCuts(raw: unknown, fallback: EqCut[]) {
-  const rows = Array.isArray(raw) ? raw : [];
-
-  return fallback.map((cut, index) => {
-    const row = asRecord(rows[index]);
-    return {
-      frequency_hz: Math.round(num(row, "frequency_hz", cut.frequency_hz, 20, 20000, 0)),
-      gain_db: num(row, "gain_db", cut.gain_db, -12, 6),
-      q: num(row, "q", cut.q, 0.2, 10, 2),
-    };
-  });
-}
-
-function eqBoosts(raw: unknown, fallback: EqBoost[]): EqBoost[] {
-  const rows = Array.isArray(raw) ? raw : [];
-
-  return fallback.map((boost, index) => {
-    const row = asRecord(rows[index]);
-    const type: "bell" | "shelf" =
-      text(row, "type", boost.type) === "shelf" ? "shelf" : "bell";
-
-    return {
-      frequency_hz: Math.round(num(row, "frequency_hz", boost.frequency_hz, 20, 20000, 0)),
-      gain_db: num(row, "gain_db", boost.gain_db, -6, 8),
-      q: num(row, "q", boost.q, 0.2, 10, 2),
-      type,
-    };
-  });
 }
 
 function buildEngineerNote(metrics: AudioMetrics, profile: GenreProfile, genre: GenreName) {
@@ -638,201 +532,6 @@ function buildDeterministicPayload(
   };
 }
 
-function completePayload(
-  parsed: Partial<ChainPayload>,
-  metrics: AudioMetrics,
-  daw: string,
-  eraId: string,
-  xyX?: number,
-  xyY?: number
-): ChainPayload {
-  const dawName = getDawName(daw);
-  const genre = getGenreName(eraId);
-  const base = buildDeterministicPayload(metrics, genre, dawName, xyX, xyY);
-  const plugins = DAW_PLUGINS[dawName];
-  const main = asRecord(parsed.main_chain);
-  const buses = asRecord(parsed.buses);
-  const gate = asRecord(main.gate);
-  const highpass = asRecord(main.highpass);
-  const subtractiveEq = asRecord(main.subtractive_eq);
-  const compressorPrimary = asRecord(main.compressor_primary);
-  const additiveEq = asRecord(main.additive_eq);
-  const deesser = asRecord(main.deesser);
-  const saturation = asRecord(main.saturation);
-  const reverbBus = asRecord(buses.reverb_bus);
-  const reverb = asRecord(reverbBus.reverb);
-  const reverbComp = asRecord(reverbBus.compressor);
-  const delayBus = asRecord(buses.delay_bus);
-  const masteringBus = asRecord(buses.mastering_bus);
-  const masteringComp = asRecord(masteringBus.bus_comp);
-  const limiter = asRecord(masteringBus.limiter);
-
-  return {
-    main_chain: {
-      gate: {
-        threshold_db: num(gate, "threshold_db", base.main_chain.gate.threshold_db, -70, -20),
-        attack_ms: num(gate, "attack_ms", base.main_chain.gate.attack_ms, 0.1, 50),
-        release_ms: num(gate, "release_ms", base.main_chain.gate.release_ms, 20, 500, 0),
-        plugin: plugins.gate,
-      },
-      highpass: {
-        frequency_hz: Math.round(num(highpass, "frequency_hz", base.main_chain.highpass.frequency_hz, 50, 180, 0)),
-        slope: text(highpass, "slope", base.main_chain.highpass.slope) === "24dB/oct" ? "24dB/oct" : "12dB/oct",
-        plugin: plugins.highpass,
-      },
-      subtractive_eq: {
-        cuts: eqCuts(subtractiveEq.cuts, base.main_chain.subtractive_eq.cuts),
-        plugin: plugins.subtractive_eq,
-      },
-      compressor_primary: {
-        style: base.main_chain.compressor_primary.style,
-        ratio: text(compressorPrimary, "ratio", base.main_chain.compressor_primary.ratio),
-        attack_ms: num(compressorPrimary, "attack_ms", base.main_chain.compressor_primary.attack_ms, 0.1, 50),
-        release_ms: num(compressorPrimary, "release_ms", base.main_chain.compressor_primary.release_ms, 20, 800, 0),
-        threshold_db: num(compressorPrimary, "threshold_db", base.main_chain.compressor_primary.threshold_db, -45, -8),
-        gain_reduction_db: num(
-          compressorPrimary,
-          "gain_reduction_db",
-          base.main_chain.compressor_primary.gain_reduction_db,
-          0.5,
-          12
-        ),
-        plugin: primaryCompressorPlugin(GENRE_PROFILES[genre], plugins),
-      },
-      ...(base.main_chain.compressor_secondary
-        ? {
-            compressor_secondary: {
-              settings: text(
-                asRecord(main.compressor_secondary),
-                "settings",
-                base.main_chain.compressor_secondary.settings
-              ),
-              plugin: plugins.compressor_secondary,
-            },
-          }
-        : {}),
-      additive_eq: {
-        boosts: eqBoosts(additiveEq.boosts, base.main_chain.additive_eq.boosts),
-        plugin: plugins.additive_eq,
-      },
-      deesser: {
-        frequency_hz: Math.round(num(deesser, "frequency_hz", base.main_chain.deesser.frequency_hz, 4000, 10000, 0)),
-        reduction_db: num(deesser, "reduction_db", base.main_chain.deesser.reduction_db, 1, 8),
-        plugin: plugins.deesser,
-      },
-      ...(base.main_chain.saturation
-        ? {
-            saturation: {
-              drive: num(saturation, "drive", base.main_chain.saturation.drive, 0, 40),
-              mix_percent: num(saturation, "mix_percent", base.main_chain.saturation.mix_percent, 0, 30, 0),
-              plugin: plugins.saturation,
-            },
-          }
-        : {}),
-    },
-    buses: {
-      reverb_bus: {
-        reverb: {
-          decay_s: num(reverb, "decay_s", base.buses.reverb_bus.reverb.decay_s, 0.1, 3, 2),
-          pre_delay_ms: num(reverb, "pre_delay_ms", base.buses.reverb_bus.reverb.pre_delay_ms, 0, 80, 0),
-          mix_percent: num(reverb, "mix_percent", base.buses.reverb_bus.reverb.mix_percent, 1, 40, 0),
-          plugin: plugins.reverb_bus_reverb,
-        },
-        ...(base.buses.reverb_bus.compressor
-          ? {
-              compressor: {
-                sidechained_to_dry_vocal: true,
-                threshold_db: num(
-                  reverbComp,
-                  "threshold_db",
-                  base.buses.reverb_bus.compressor.threshold_db,
-                  -45,
-                  -8,
-                  0
-                ),
-                ratio: "4:1",
-                plugin: plugins.reverb_bus_comp,
-                note: "Sidechain to dry vocal so reverb ducks when artist raps",
-              },
-            }
-          : {}),
-      },
-      delay_bus: {
-        time: text(delayBus, "time", base.buses.delay_bus.time),
-        feedback_percent: num(delayBus, "feedback_percent", base.buses.delay_bus.feedback_percent, 0, 60, 0),
-        mix_percent: num(delayBus, "mix_percent", base.buses.delay_bus.mix_percent, 0, 35, 0),
-        automated_on_phrase_endings: base.buses.delay_bus.automated_on_phrase_endings,
-        plugin: plugins.delay_bus,
-      },
-      ...(base.buses.parallel_comp_bus
-        ? {
-            parallel_comp_bus: {
-              ratio: text(asRecord(buses.parallel_comp_bus), "ratio", base.buses.parallel_comp_bus.ratio),
-              attack_ms: num(asRecord(buses.parallel_comp_bus), "attack_ms", base.buses.parallel_comp_bus.attack_ms, 0.1, 50),
-              threshold_db: -30,
-              blend_percent: num(
-                asRecord(buses.parallel_comp_bus),
-                "blend_percent",
-                base.buses.parallel_comp_bus.blend_percent,
-                0,
-                40,
-                0
-              ),
-              plugin: plugins.parallel_comp_bus,
-              note: "Blend in parallel for density without losing dynamics",
-            },
-          }
-        : {}),
-      ...(base.buses.width_bus
-        ? {
-            width_bus: {
-              amount_percent: num(asRecord(buses.width_bus), "amount_percent", base.buses.width_bus.amount_percent, 0, 50, 0),
-              plugin: plugins.width_bus,
-            },
-          }
-        : {}),
-      ...(base.buses.saturation_bus
-        ? {
-            saturation_bus: {
-              style: text(asRecord(buses.saturation_bus), "style", base.buses.saturation_bus.style),
-              mix_percent: num(asRecord(buses.saturation_bus), "mix_percent", base.buses.saturation_bus.mix_percent, 0, 25, 0),
-              plugin: plugins.saturation_bus,
-            },
-          }
-        : {}),
-      ...(base.buses.distortion_bus
-        ? {
-            distortion_bus: {
-              style: text(asRecord(buses.distortion_bus), "style", base.buses.distortion_bus.style),
-              blend_percent: num(asRecord(buses.distortion_bus), "blend_percent", base.buses.distortion_bus.blend_percent, 0, 25, 0),
-              plugin: plugins.saturation_bus,
-            },
-          }
-        : {}),
-      mastering_bus: {
-        bus_comp: {
-          ratio: text(masteringComp, "ratio", base.buses.mastering_bus.bus_comp.ratio),
-          attack_ms: num(masteringComp, "attack_ms", base.buses.mastering_bus.bus_comp.attack_ms, 0.1, 50),
-          release_ms: num(masteringComp, "release_ms", base.buses.mastering_bus.bus_comp.release_ms, 20, 500, 0),
-          gain_reduction_db: num(
-            masteringComp,
-            "gain_reduction_db",
-            base.buses.mastering_bus.bus_comp.gain_reduction_db,
-            0,
-            6
-          ),
-          plugin: plugins.mastering_bus_comp,
-        },
-        limiter: {
-          ceiling_db: num(limiter, "ceiling_db", base.buses.mastering_bus.limiter.ceiling_db, -3, 0),
-          plugin: plugins.mastering_limiter,
-        },
-      },
-    },
-    engineer_note: buildEngineerNote(metrics, GENRE_PROFILES[genre], genre),
-  };
-}
-
 function formatHz(value: number) {
   return value >= 1000 ? `${round(value / 1000, value >= 10000 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
 }
@@ -1042,7 +741,6 @@ function buildXYPosition(payload: ChainPayload, xyX?: number, xyY?: number): XYP
 }
 
 function buildChainResponse(
-  values: Partial<ChainPayload>,
   metrics: AudioMetrics,
   daw: string,
   eraId: string,
@@ -1050,7 +748,7 @@ function buildChainResponse(
   xyY?: number
 ): ClaudeChainResponse {
   const genre = getGenreName(eraId);
-  const payload = completePayload(values, metrics, daw, eraId, xyX, xyY);
+  const payload = buildDeterministicPayload(metrics, genre, getDawName(daw), xyX, xyY);
 
   return {
     chain: buildChain(payload, metrics, genre),
@@ -1068,13 +766,20 @@ async function callClaudeWithRetry(params: {
   xyX?: number;
   xyY?: number;
 }): Promise<ClaudeChainResponse> {
+  const deterministic = buildChainResponse(
+    params.metrics,
+    params.daw,
+    params.eraId,
+    params.xyX,
+    params.xyY
+  );
   let client: Anthropic;
   try {
     client = getAnthropicClient();
   } catch (err) {
     console.error("[analyze] Claude client unavailable:", err);
     console.warn("[analyze] Using deterministic local chain fallback.");
-    return buildChainResponse({}, params.metrics, params.daw, params.eraId, params.xyX, params.xyY);
+    return deterministic;
   }
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1089,21 +794,10 @@ async function callClaudeWithRetry(params: {
       const textBlock = message.content.find((b) => b.type === "text");
       if (!textBlock || textBlock.type !== "text") continue;
 
-      const parsed = parseClaudeResponse(textBlock.text);
-      if (parsed) {
-        return buildChainResponse(
-          parsed,
-          params.metrics,
-          params.daw,
-          params.eraId,
-          params.xyX,
-          params.xyY
-        );
+      const explanation = textBlock.text.trim();
+      if (explanation) {
+        return { ...deterministic, engineer_note: explanation };
       }
-
-      console.warn(
-        `[analyze] Claude returned malformed chain JSON (attempt ${attempt + 1}), retrying.`
-      );
     } catch (err) {
       console.error(`[analyze] Claude API error (attempt ${attempt + 1}):`, err);
       if (attempt === 1) break;
@@ -1111,7 +805,7 @@ async function callClaudeWithRetry(params: {
   }
 
   console.warn("[analyze] Using deterministic local chain fallback.");
-  return buildChainResponse({}, params.metrics, params.daw, params.eraId, params.xyX, params.xyY);
+  return deterministic;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1300,7 +994,40 @@ function transformAudioServiceResponse(raw: unknown): AudioMetrics {
   return {
     lufs: metricNumber(-18, vocal.lufs_integrated, vocal.lufs),
     dynamicRange: metricNumber(7, vocal.dynamic_range, vocal.dynamicRange),
-    truePeak: metricNumber(-1, vocal.true_peak, vocal.truePeak),
+    truePeak: metricNumber(
+      -1,
+      vocal.true_peak,
+      vocal.truePeak,
+      vocal.true_peak_estimate_db,
+      vocal.truePeakEstimateDb,
+      vocal.peak_db
+    ),
+    sibilanceEnergy: metricNumber(
+      0,
+      vocal.sibilance_energy,
+      vocal.sibilanceEnergy
+    ),
+    harshness: metricNumber(0, vocal.harshness),
+    lowMidBuildup: metricNumber(
+      0,
+      vocal.low_mid_buildup,
+      vocal.lowMidBuildup
+    ),
+    noiseFloorDb: metricNumber(
+      -45,
+      vocal.noise_floor_db,
+      vocal.noiseFloorDb
+    ),
+    truePeakEstimateDb: metricNumber(
+      -1,
+      vocal.true_peak_estimate_db,
+      vocal.truePeakEstimateDb
+    ),
+    crestFactorDb: metricNumber(
+      0,
+      vocal.crest_factor_db,
+      vocal.crestFactorDb
+    ),
     spectralCentroid: metricNumber(
       2000,
       vocal.spectral_centroid,
@@ -1341,11 +1068,15 @@ async function analyzeAudio(
   beatFile: File | null,
   eraId: string,
   clientMetrics: Partial<AudioMetrics>
-): Promise<AudioMetrics> {
+): Promise<AudioAnalysisResult> {
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
   if (!serviceUrl) {
     console.warn("[analyze] Using client-side metrics fallback.");
-    return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+    return {
+      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      fallback_used: true,
+      audio_service_status: "fallback",
+    };
   }
 
   const form = new FormData();
@@ -1362,14 +1093,26 @@ async function analyzeAudio(
     if (!res.ok) {
       console.warn(`[analyze] Audio service returned ${res.status}.`);
       console.warn("[analyze] Using client-side metrics fallback.");
-      return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+      return {
+        metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+        fallback_used: true,
+        audio_service_status: "fallback",
+      };
     }
 
-    return transformAudioServiceResponse(await res.json());
+    return {
+      metrics: transformAudioServiceResponse(await res.json()),
+      fallback_used: false,
+      audio_service_status: "ok",
+    };
   } catch (error) {
     console.warn("[analyze] Audio service unavailable.", error);
     console.warn("[analyze] Using client-side metrics fallback.");
-    return withClientMetricsFallback(clientMetrics, eraId, beatFile);
+    return {
+      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      fallback_used: true,
+      audio_service_status: "fallback",
+    };
   }
 }
 
@@ -1396,11 +1139,10 @@ export async function POST(req: NextRequest) {
     /* ── Cached metrics path (XY drag / era switch — no audio re-upload) ── */
     if (cachedMetricsRaw) {
       let metrics: AudioMetrics;
+      let cachedPayload: CachedMetricsPayload;
       try {
-        metrics = completeMetrics(
-          JSON.parse(cachedMetricsRaw) as Partial<AudioMetrics>,
-          eraId
-        );
+        cachedPayload = JSON.parse(cachedMetricsRaw) as CachedMetricsPayload;
+        metrics = completeMetrics(cachedPayload, eraId);
       } catch {
         return NextResponse.json(
           { error: "analysis_failed", message: "Invalid cached metrics JSON." },
@@ -1417,6 +1159,10 @@ export async function POST(req: NextRequest) {
         xyX,
         xyY,
       });
+      const fallbackUsed = readFallbackUsed(cachedPayload.fallback_used);
+      const audioServiceStatus = readAudioServiceStatus(
+        cachedPayload.audio_service_status
+      );
 
       return NextResponse.json({
         chain: result.chain,
@@ -1424,6 +1170,9 @@ export async function POST(req: NextRequest) {
         engineer_note: result.engineer_note,
         xyPosition: result.xyPosition,
         metrics,
+        analysis_version: "1.0",
+        fallback_used: fallbackUsed,
+        audio_service_status: audioServiceStatus,
       });
     }
 
@@ -1459,7 +1208,8 @@ export async function POST(req: NextRequest) {
     }
 
     /* Call Python audio analysis service */
-    const metrics = await analyzeAudio(vocalFile, beatFile, eraId, clientMetrics);
+    const audio = await analyzeAudio(vocalFile, beatFile, eraId, clientMetrics);
+    const { metrics } = audio;
 
     /* Build prompt and call Claude */
     const prompt = buildPrompt(metrics, daw, eraId);
@@ -1476,6 +1226,9 @@ export async function POST(req: NextRequest) {
       engineer_note: result.engineer_note,
       xyPosition: result.xyPosition,
       metrics,
+      analysis_version: "1.0",
+      fallback_used: audio.fallback_used,
+      audio_service_status: audio.audio_service_status,
     });
   } catch (err) {
     console.error("[analyze] Unexpected error:", err);

@@ -4,7 +4,9 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import GateScreen from "@/components/GateScreen";
@@ -23,9 +25,7 @@ import {
 import { eras, defaultEra } from "@/lib/eras";
 import type {
   CollisionZone,
-  MixRoomEQCut,
   MixRoomReport,
-  PocketZone,
   SpectralData,
 } from "@/lib/types";
 import styles from "./page.module.css";
@@ -35,9 +35,6 @@ const MIN_FREQ = 20;
 const MAX_FREQ = 20000;
 const MIN_DB = -80;
 const MAX_DB = 0;
-const COLLISION_THRESHOLD_DB = -40;
-const POCKET_BEAT_THRESHOLD_DB = -50;
-const POCKET_VOCAL_THRESHOLD_DB = -55;
 
 interface CurvePoint {
   f: number;
@@ -258,95 +255,6 @@ function interpolateSpectrum(data: SpectralData | null, frequency: number) {
   );
 }
 
-function findCollisions(
-  vocal: SpectralData,
-  beat: SpectralData
-): CollisionZone[] {
-  const zones: CollisionZone[] = [];
-
-  for (let i = 0; i < vocal.magnitudes.length; i++) {
-    const freq = vocal.frequencies[i];
-    if (freq < MIN_FREQ || freq > MAX_FREQ) continue;
-
-    const vocalDb = vocal.magnitudes[i] ?? MIN_DB;
-    const beatDb = interpolateSpectrum(beat, freq);
-
-    if (
-      vocalDb > COLLISION_THRESHOLD_DB &&
-      beatDb > COLLISION_THRESHOLD_DB
-    ) {
-      const severity =
-        Math.max(0, vocalDb - COLLISION_THRESHOLD_DB) +
-        Math.max(0, beatDb - COLLISION_THRESHOLD_DB);
-      const previous = zones[zones.length - 1];
-
-      if (previous && freq - previous.endFreq < 50) {
-        previous.endFreq = freq;
-        previous.peakVocalDb = Math.max(previous.peakVocalDb, vocalDb);
-        previous.peakBeatDb = Math.max(previous.peakBeatDb, beatDb);
-
-        if (severity > previous.severity) {
-          previous.severity = severity;
-          previous.centerFreq = freq;
-        }
-      } else {
-        zones.push({
-          startFreq: freq,
-          endFreq: freq,
-          centerFreq: freq,
-          severity,
-          peakVocalDb: vocalDb,
-          peakBeatDb: beatDb,
-        });
-      }
-    }
-  }
-
-  return zones
-    .filter((zone) => zone.endFreq - zone.startFreq > 20)
-    .sort((a, b) => b.severity - a.severity);
-}
-
-function findPockets(vocal: SpectralData, beat: SpectralData): PocketZone[] {
-  const zones: PocketZone[] = [];
-
-  for (let i = 0; i < vocal.magnitudes.length; i++) {
-    const freq = vocal.frequencies[i];
-    if (freq < MIN_FREQ || freq > MAX_FREQ) continue;
-
-    const vocalDb = vocal.magnitudes[i] ?? MIN_DB;
-    const beatDb = interpolateSpectrum(beat, freq);
-
-    if (beatDb < POCKET_BEAT_THRESHOLD_DB && vocalDb > POCKET_VOCAL_THRESHOLD_DB) {
-      const strength = vocalDb - beatDb;
-      const previous = zones[zones.length - 1];
-
-      if (previous && freq - previous.endFreq < 70) {
-        previous.endFreq = freq;
-        if (strength > previous.strength) {
-          previous.strength = strength;
-          previous.centerFreq = freq;
-          previous.vocalDb = vocalDb;
-          previous.beatDb = beatDb;
-        }
-      } else {
-        zones.push({
-          startFreq: freq,
-          endFreq: freq,
-          centerFreq: freq,
-          strength,
-          vocalDb,
-          beatDb,
-        });
-      }
-    }
-  }
-
-  return zones
-    .filter((zone) => zone.endFreq - zone.startFreq > 30)
-    .sort((a, b) => b.strength - a.strength);
-}
-
 function buildCurve(data: SpectralData | null): CurvePoint[] {
   if (!data) {
     return [
@@ -396,60 +304,168 @@ async function loadAudioFile(source: string, filename: string) {
   return downloadProjectAudio(source, filename);
 }
 
-function makeSummary(collisions: CollisionZone[], pockets: PocketZone[]) {
-  if (collisions.length > 0) {
-    const first = collisions[0];
-    return `${collisions.length} collision zone${collisions.length === 1 ? "" : "s"} found, strongest around ${formatFrequency(first.centerFreq)}.`;
-  }
-
-  if (pockets.length > 0) {
-    return `No major collisions found. The cleanest pocket is around ${formatFrequency(pockets[0].centerFreq)}.`;
-  }
-
-  return "No major collisions found between the vocal and beat.";
+function scoreTone(score: number) {
+  if (score > 70) return "var(--text-primary)";
+  if (score >= 50) return "var(--accent-lime)";
+  return "var(--status-active)";
 }
 
-function makeMatchScore(collisions: CollisionZone[], pockets: PocketZone[]) {
-  const collisionPressure = collisions
-    .slice(0, 3)
-    .reduce((sum, zone) => sum + zone.severity, 0);
-  const pocketLift = Math.min(
-    18,
-    pockets.slice(0, 2).reduce((sum, zone) => sum + zone.strength, 0) / 4
+function scoreGlow(score: number) {
+  if (score > 70) return "0 0 16px rgba(255,255,255,0.32)";
+  if (score >= 50) return "0 0 16px rgba(200,241,53,0.2)";
+  return "0 0 16px rgba(245,166,35,0.28)";
+}
+
+function isBrowserPlayableUrl(source: string | null) {
+  if (!source) return false;
+  return (
+    source.startsWith("blob:") ||
+    source.startsWith("data:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://")
   );
-
-  return Math.round(clamp(88 - collisionPressure / 2 + pocketLift, 0, 100));
 }
 
-function makeReport(params: {
-  projectId: string | undefined;
-  vocalVersionId: string | null;
-  vocalSource: string | null;
-  beatSource: string | null;
-  genre: string;
-  daw: string;
-  collisions: CollisionZone[];
-  pockets: PocketZone[];
-  explanation: string | null;
-  cuts: MixRoomEQCut[];
-}): MixRoomReport {
-  return {
-    version: 1,
-    analysis_version: "browser_fft_v1",
-    analyzed_at: new Date().toISOString(),
-    vocal_version_id: params.vocalVersionId,
-    beat_file_url: params.beatSource,
-    vocal_source: params.vocalSource,
-    beat_source: params.beatSource,
-    genre: params.genre,
-    daw: params.daw,
-    matchScore: makeMatchScore(params.collisions, params.pockets),
-    summary: makeSummary(params.collisions, params.pockets),
-    explanation: params.explanation,
-    collisions: params.collisions,
-    pockets: params.pockets,
-    eq_cuts: params.cuts,
-  };
+type MixRoomViewMode = "frequency" | "timeline";
+
+interface MixRoomApiResponse {
+  report?: MixRoomReport;
+  spectrum?: SpectrumState;
+  error?: string;
+  message?: string;
+  audio_service_status?: string;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
+}
+
+const isAcceptedAudioFile = (file: File) => {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".wav") || name.endsWith(".mp3");
+};
+
+const shortFileName = (name: string) =>
+  name.length > 28 ? `${name.slice(0, 25)}...` : name;
+
+async function resolveAudioFile(
+  localFile: File | null,
+  source: string | null,
+  filename: string
+) {
+  if (localFile) return localFile;
+  if (!source) throw new Error("Missing audio source.");
+  return loadAudioFile(source, filename);
+}
+
+function MixRoomTransport({
+  sourceUrl,
+  hasSource,
+  trackName,
+  sourceLabel,
+  statusText,
+  matchScore,
+}: {
+  sourceUrl: string | null;
+  hasSource: boolean;
+  trackName: string;
+  sourceLabel: string;
+  statusText: string;
+  matchScore: number | null;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setPlaying(false);
+      setDuration(0);
+      setCurrentTime(0);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [sourceUrl]);
+
+  const togglePlay = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio || !sourceUrl) return;
+
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+      return;
+    }
+
+    await audio.play().catch(() => undefined);
+    setPlaying(!audio.paused);
+  }, [playing, sourceUrl]);
+
+  const progress = duration > 0 ? currentTime / duration : 0;
+  const bars = Array.from({ length: 34 }, (_, index) => {
+    const base = 18 + ((index * 19) % 42);
+    const active = index / 34 <= progress;
+    return (
+      <span
+        key={index}
+        className={active ? styles.waveformBarActive : ""}
+        style={{ height: `${base}%` }}
+      />
+    );
+  });
+
+  return (
+    <section className={styles.transportBar} aria-label="Audio transport">
+      <audio
+        ref={audioRef}
+        src={sourceUrl ?? undefined}
+        preload="metadata"
+        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onEnded={() => setPlaying(false)}
+      />
+
+      <div className={styles.transportTrack}>
+        <button
+          type="button"
+          className={styles.playButton}
+          onClick={togglePlay}
+          disabled={!sourceUrl}
+          aria-label={playing ? "Pause source audio" : "Play source audio"}
+        >
+          {playing ? "II" : ">"}
+        </button>
+        <span>
+          <strong>{trackName}</strong>
+          <em>{hasSource ? sourceLabel : "no source audio loaded"}</em>
+        </span>
+      </div>
+
+      <div className={styles.transportWaveform}>
+        <div className={styles.waveformBars}>{bars}</div>
+        <input
+          type="range"
+          min="0"
+          max={duration || 0}
+          step="0.01"
+          value={currentTime}
+          onChange={(event) => {
+            const nextTime = Number(event.target.value);
+            setCurrentTime(nextTime);
+            if (audioRef.current) audioRef.current.currentTime = nextTime;
+          }}
+          disabled={!sourceUrl || duration === 0}
+          aria-label="Scrub source audio"
+        />
+      </div>
+
+      <div className={styles.transportTools}>
+        <span className={styles.transportStatus}>{statusText}</span>
+        <span className={styles.transportScore}>
+          {matchScore === null ? "--" : `${matchScore}/100`}
+        </span>
+      </div>
+    </section>
+  );
 }
 
 export default function MixRoomPage() {
@@ -462,15 +478,16 @@ export default function MixRoomPage() {
   const addMixRoomEQCut = useProject((state) => state.addMixRoomEQCut);
   const projectVocal = getCurrentVocal(project);
   const projectId = project?.id;
-  const vocalSource = projectVocal?.url ?? vocalFileUrl;
-  const beatSource = project?.beat_file_url ?? beatFileUrl;
-  const vocalFilename = projectVocal?.filename ?? "project-vocal.wav";
-  const beatFilename = project?.beat_filename ?? "project-beat.wav";
   const dawName = daw || "Logic Pro";
   const savedReport = isMixRoomReport(project?.mix_room_report)
     ? project?.mix_room_report
     : null;
 
+  const [localVocalFile, setLocalVocalFile] = useState<File | null>(null);
+  const [localBeatFile, setLocalBeatFile] = useState<File | null>(null);
+  const [localVocalUrl, setLocalVocalUrl] = useState<string | null>(null);
+  const [localBeatUrl, setLocalBeatUrl] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<MixRoomViewMode>("frequency");
   const [vizVisible, setVizVisible] = useState(false);
   const [beatDrawn, setBeatDrawn] = useState(false);
   const [vocalDrawn, setVocalDrawn] = useState(false);
@@ -486,8 +503,22 @@ export default function MixRoomPage() {
   const [savingZone, setSavingZone] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
 
+  const vocalSource = localVocalUrl ?? projectVocal?.url ?? vocalFileUrl;
+  const beatSource = localBeatUrl ?? project?.beat_file_url ?? beatFileUrl;
+  const vocalFilename =
+    localVocalFile?.name ?? projectVocal?.filename ?? "project-vocal.wav";
+  const beatFilename =
+    localBeatFile?.name ?? project?.beat_filename ?? "project-beat.wav";
   const hasBeat = !!beatSource;
   const hasVocal = !!vocalSource;
+  const missingPrompt =
+    !hasVocal && !hasBeat
+      ? "Upload a vocal and a beat to see where they fight for space."
+      : !hasVocal
+        ? "Vocal missing. Upload the vocal you want to fit into this beat."
+        : !hasBeat
+          ? "Beat missing. Upload the instrumental so MimiQ can compare it with the vocal."
+          : null;
   const collisions = report?.collisions ?? [];
   const pockets = report?.pockets ?? [];
   const topCollisions = collisions.slice(0, 4);
@@ -497,6 +528,19 @@ export default function MixRoomPage() {
     () => buildCurve(spectrum?.vocal ?? null),
     [spectrum]
   );
+  const sourceUrl = vocalSource ?? beatSource ?? null;
+  const playbackUrl = isBrowserPlayableUrl(sourceUrl) ? sourceUrl : null;
+  const transportTrackName =
+    projectVocal?.label ?? project?.name ?? "Lead Vocal";
+  const transportSourceLabel = playbackUrl
+    ? vocalSource
+      ? "source vocal monitor"
+      : "beat source monitor"
+    : sourceUrl
+      ? "project source stored"
+      : "waiting for Sandbox audio";
+  const matchScore = report?.matchScore ?? null;
+  const metricStatus = isLoading ? "Scanning" : report ? "Ready" : "Waiting";
 
   useEffect(() => {
     const t1 = setTimeout(() => setVizVisible(true), 100);
@@ -563,39 +607,89 @@ export default function MixRoomPage() {
     [projectId, setActiveProject, updateProject]
   );
 
+  const handleAudioUpload = useCallback(
+    (kind: "vocal" | "beat", event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      event.currentTarget.value = "";
+      if (!file) return;
+
+      if (!isAcceptedAudioFile(file)) {
+        setErrorText("Upload a WAV or MP3 file for Mix Room.");
+        return;
+      }
+
+      const nextUrl = URL.createObjectURL(file);
+      if (kind === "vocal") {
+        setLocalVocalFile(file);
+        setLocalVocalUrl((previous) => {
+          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+          return nextUrl;
+        });
+      } else {
+        setLocalBeatFile(file);
+        setLocalBeatUrl((previous) => {
+          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+          return nextUrl;
+        });
+      }
+
+      setSpectrum(null);
+      setReport(null);
+      setConfirmation(null);
+      setErrorText(null);
+      setStatusText(
+        kind === "vocal"
+          ? "Vocal loaded. Add the beat to run Mix Room."
+          : "Beat loaded. Add the vocal to run Mix Room."
+      );
+    },
+    []
+  );
+
+  useEffect(
+    () => () => {
+      if (localVocalUrl?.startsWith("blob:")) URL.revokeObjectURL(localVocalUrl);
+    },
+    [localVocalUrl]
+  );
+
+  useEffect(
+    () => () => {
+      if (localBeatUrl?.startsWith("blob:")) URL.revokeObjectURL(localBeatUrl);
+    },
+    [localBeatUrl]
+  );
+
   useEffect(() => {
-    if (!projectId || !vocalSource || !beatSource) {
+    if (!vocalSource || !beatSource) {
       const frame = requestAnimationFrame(() => {
         setIsLoading(false);
         setSpectrum(null);
-        setStatusText(
-          !hasVocal
-            ? "Upload a vocal in Sandbox to start Mix Room."
-            : "Add a beat in Sandbox for collision analysis."
-        );
+        setStatusText(missingPrompt ?? "Waiting for both audio files...");
       });
 
       return () => cancelAnimationFrame(frame);
     }
 
     let cancelled = false;
-    const savedVocalSource = vocalSource;
-    const savedBeatSource = beatSource;
-    if (!savedVocalSource || !savedBeatSource) return;
+    const currentVocalSource = vocalSource;
+    const currentBeatSource = beatSource;
+    const currentVocalFile = localVocalFile;
+    const currentBeatFile = localBeatFile;
 
     async function runAnalysis() {
       setIsLoading(true);
       setErrorText(null);
-      setStatusText("Loading project audio...");
+      setStatusText("Loading vocal and beat...");
 
       try {
         const [vocalFile, beatFile] = await Promise.all([
-          loadAudioFile(savedVocalSource, vocalFilename),
-          loadAudioFile(savedBeatSource, beatFilename),
+          resolveAudioFile(currentVocalFile, currentVocalSource, vocalFilename),
+          resolveAudioFile(currentBeatFile, currentBeatSource, beatFilename),
         ]);
 
         if (cancelled) return;
-        setStatusText("Running browser FFT...");
+        setStatusText("Reading frequency balance...");
 
         const [vocalSpectrum, beatSpectrum] = await Promise.all([
           analyzeSpectrum(vocalFile),
@@ -603,69 +697,60 @@ export default function MixRoomPage() {
         ]);
 
         if (cancelled) return;
+        setStatusText("Sending both files to Mix Room...");
 
-        const nextSpectrum = {
-          vocal: vocalSpectrum,
-          beat: beatSpectrum,
-        };
-        const nextCollisions = findCollisions(vocalSpectrum, beatSpectrum);
-        const nextPockets = findPockets(vocalSpectrum, beatSpectrum);
-        const currentSavedReport =
-          useProject.getState().project?.mix_room_report ?? null;
-        const existingCuts = getMixRoomEQCuts(currentSavedReport);
-        const existingExplanation = isMixRoomReport(currentSavedReport)
-          ? currentSavedReport.explanation
-          : null;
-        const baseReport = makeReport({
-          projectId,
-          vocalVersionId: projectVocal?.id ?? null,
-          vocalSource: savedVocalSource,
-          beatSource: savedBeatSource,
-          genre: activeEra.name,
-          daw: dawName,
-          collisions: nextCollisions,
-          pockets: nextPockets,
-          explanation: existingExplanation ?? null,
-          cuts: existingCuts,
-        });
+        const form = new FormData();
+        form.append("vocalFile", vocalFile);
+        form.append("beatFile", beatFile);
+        form.append("genre", activeEra.name);
+        form.append("daw", dawName);
+        form.append("vocalSource", currentVocalSource ?? `upload:${vocalFile.name}`);
+        form.append("beatSource", currentBeatSource ?? `upload:${beatFile.name}`);
+        if (projectVocal?.id) form.append("vocalVersionId", projectVocal.id);
+        form.append("vocalSpectrum", JSON.stringify(vocalSpectrum));
+        form.append("beatSpectrum", JSON.stringify(beatSpectrum));
 
-        setSpectrum(nextSpectrum);
-        setReport(baseReport);
-        saveReport(baseReport);
-
-        setStatusText("Asking Claude what it means...");
-
-        const explainRes = await fetch("/api/mix-room", {
+        const analysisRes = await fetch("/api/mix-room", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            collisions: nextCollisions.slice(0, 3),
-            genre: activeEra.name,
-            daw: dawName,
-          }),
+          body: form,
         });
 
-        if (!explainRes.ok) throw new Error("Claude explanation failed.");
-        const explainData = (await explainRes.json()) as {
-          explanation?: string;
-        };
+        const analysisData = (await analysisRes.json()) as MixRoomApiResponse;
+        if (!analysisRes.ok || !analysisData.report || !analysisData.spectrum) {
+          throw new Error(
+            analysisData.message ||
+              "Mix Room could not analyze the vocal and beat together."
+          );
+        }
 
         if (cancelled) return;
 
-        const explainedReport = {
-          ...baseReport,
-          explanation:
-            explainData.explanation?.trim() ||
-            "These spots are where the beat is covering the vocal. Make a small EQ cut at the strongest collision so the words can sit forward.",
+        const existingCuts = getMixRoomEQCuts(
+          useProject.getState().project?.mix_room_report ?? null
+        );
+        const nextReport = {
+          ...analysisData.report,
+          eq_cuts: existingCuts.length
+            ? [...(analysisData.report.eq_cuts ?? []), ...existingCuts]
+            : analysisData.report.eq_cuts,
         };
 
-        setReport(explainedReport);
-        saveReport(explainedReport);
-        setStatusText("Analysis complete.");
+        setSpectrum(analysisData.spectrum);
+        setReport(nextReport);
+        saveReport(nextReport);
+        setStatusText(
+          analysisData.fallback_used
+            ? "Analysis complete with labeled fallback."
+            : "Analysis complete."
+        );
       } catch (error) {
         console.error(error);
         if (!cancelled) {
-          setErrorText("Mix Room could not read both project files yet.");
+          setErrorText(
+            error instanceof Error
+              ? error.message
+              : "Mix Room could not read both files yet."
+          );
           setStatusText("Analysis paused.");
         }
       } finally {
@@ -683,7 +768,9 @@ export default function MixRoomPage() {
     beatFilename,
     beatSource,
     dawName,
-    hasVocal,
+    localBeatFile,
+    localVocalFile,
+    missingPrompt,
     projectId,
     projectVocal?.id,
     saveReport,
@@ -813,6 +900,33 @@ export default function MixRoomPage() {
     );
   };
 
+  const timelineZones = [
+    ...collisions.slice(0, 5).map((zone) => ({
+      kind: "collision" as const,
+      startFreq: zone.startFreq,
+      endFreq: zone.endFreq,
+      centerFreq: zone.centerFreq,
+      value: zone.severity,
+      label: "Fight",
+    })),
+    ...pockets.slice(0, 4).map((zone) => ({
+      kind: "pocket" as const,
+      startFreq: zone.startFreq,
+      endFreq: zone.endFreq,
+      centerFreq: zone.centerFreq,
+      value: zone.strength,
+      label: "Pocket",
+    })),
+  ].sort((a, b) => a.centerFreq - b.centerFreq);
+  const vocalUploadLabel =
+    localVocalFile?.name ??
+    projectVocal?.filename ??
+    (vocalSource ? "Project vocal loaded" : null);
+  const beatUploadLabel =
+    localBeatFile?.name ??
+    project?.beat_filename ??
+    (beatSource ? "Project beat loaded" : null);
+
   return (
     <ProjectGate>
       <div className={styles.layout}>
@@ -834,165 +948,266 @@ export default function MixRoomPage() {
         />
         <GateScreen>
           <div className={styles.contentArea}>
-            <div className={styles.header}>
-              <div className={styles.title}>Mix Room</div>
-              <div className={styles.segmentedControl}>
-                <div className={`${styles.segment} ${styles.segmentActive}`}>
-                  Frequency View
-                </div>
-                <div className={styles.tooltipContainer}>
-                  <div className={styles.segment}>Timeline View</div>
-                  <div className={styles.tooltip}>Coming soon</div>
+            <section className={styles.metricsBar} aria-label="Mix Room metrics">
+              <div className={styles.metricCell}>
+                <span className={styles.metricIcon} aria-hidden="true">
+                  ||
+                </span>
+                <div>
+                  <span className={styles.metricLabel}>Pocket match</span>
+                  <strong className={styles.metricValue}>
+                    {matchScore === null ? "--" : `${matchScore}/100`}
+                  </strong>
                 </div>
               </div>
-            </div>
-            <div className={styles.divider} />
+              <div className={styles.metricCell}>
+                <span className={styles.metricIcon} aria-hidden="true">
+                  !!
+                </span>
+                <div>
+                  <span className={styles.metricLabel}>Collisions</span>
+                  <strong className={styles.metricValue}>{collisions.length}</strong>
+                </div>
+              </div>
+              <div className={styles.metricCell}>
+                <span className={styles.metricIcon} aria-hidden="true">
+                  --
+                </span>
+                <div>
+                  <span className={styles.metricLabel}>Pockets</span>
+                  <strong className={styles.metricValue}>{pockets.length}</strong>
+                </div>
+              </div>
+              <div className={styles.metricCell}>
+                <span className={styles.metricIcon} aria-hidden="true">
+                  Hz
+                </span>
+                <div>
+                  <span className={styles.metricLabel}>Cursor</span>
+                  <strong className={styles.metricValue}>
+                    {hover ? formatFrequency(hover.frequency) : metricStatus}
+                  </strong>
+                </div>
+              </div>
+              <div className={styles.segmentedControl}>
+                <button
+                  type="button"
+                  className={`${styles.segment} ${
+                    viewMode === "frequency" ? styles.segmentActive : ""
+                  }`}
+                  aria-pressed={viewMode === "frequency"}
+                  onClick={() => setViewMode("frequency")}
+                >
+                  Frequency View
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.segment} ${
+                    viewMode === "timeline" ? styles.segmentActive : ""
+                  }`}
+                  aria-pressed={viewMode === "timeline"}
+                  onClick={() => setViewMode("timeline")}
+                >
+                  Timeline View
+                </button>
+              </div>
+            </section>
             <div className={styles.columns}>
               <div className={styles.leftColumn}>
                 <div className={styles.leftContent}>
                   <div
                     className={styles.vizContainer}
-                    onPointerMove={handleHover}
+                    onPointerMove={viewMode === "frequency" ? handleHover : undefined}
                     onPointerLeave={() => setHover(null)}
                     style={{
                       opacity: vizVisible ? 1 : 0,
                       transition: "opacity 400ms ease-out",
                     }}
                   >
-                    <svg
-                      width="100%"
-                      height="100%"
-                      viewBox="0 0 100 100"
-                      preserveAspectRatio="none"
-                    >
-                      {[0, -20, -40, -60, -80].map((db) => (
-                        <line
-                          key={db}
-                          x1="0"
-                          x2="100"
-                          y1={dbToY(db)}
-                          y2={dbToY(db)}
-                          className={styles.gridLine}
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
-                      {[20, 100, 500, 1000, 5000, 10000, 20000].map((freq) => (
-                        <line
-                          key={freq}
-                          x1={logScale(freq)}
-                          x2={logScale(freq)}
-                          y1="0"
-                          y2="100"
-                          className={styles.gridLine}
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
+                    {viewMode === "frequency" ? (
+                      <>
+                        <svg
+                          width="100%"
+                          height="100%"
+                          viewBox="0 0 100 100"
+                          preserveAspectRatio="none"
+                        >
+                          {[0, -20, -40, -60, -80].map((db) => (
+                            <line
+                              key={db}
+                              x1="0"
+                              x2="100"
+                              y1={dbToY(db)}
+                              y2={dbToY(db)}
+                              className={styles.gridLine}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ))}
+                          {[20, 100, 500, 1000, 5000, 10000, 20000].map((freq) => (
+                            <line
+                              key={freq}
+                              x1={logScale(freq)}
+                              x2={logScale(freq)}
+                              y1="0"
+                              y2="100"
+                              className={styles.gridLine}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ))}
 
-                      {zonesVisible &&
-                        pockets.slice(0, 8).map((zone) => (
-                          <rect
-                            key={`pocket-${zone.startFreq}-${zone.endFreq}`}
-                            x={logScale(zone.startFreq)}
-                            y={0}
-                            width={Math.max(
-                              0.25,
-                              logScale(zone.endFreq) - logScale(zone.startFreq)
-                            )}
-                            height={100}
-                            className={styles.pocketBand}
-                            vectorEffect="non-scaling-stroke"
+                          {zonesVisible &&
+                            pockets.slice(0, 8).map((zone) => (
+                              <rect
+                                key={`pocket-${zone.startFreq}-${zone.endFreq}`}
+                                x={logScale(zone.startFreq)}
+                                y={0}
+                                width={Math.max(
+                                  0.25,
+                                  logScale(zone.endFreq) - logScale(zone.startFreq)
+                                )}
+                                height={100}
+                                className={styles.pocketBand}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            ))}
+
+                          {zonesVisible &&
+                            collisions.slice(0, 10).map((zone) => (
+                              <rect
+                                key={`collision-${zone.startFreq}-${zone.endFreq}`}
+                                x={logScale(zone.startFreq)}
+                                y={0}
+                                width={Math.max(
+                                  0.25,
+                                  logScale(zone.endFreq) - logScale(zone.startFreq)
+                                )}
+                                height={100}
+                                className={styles.collisionBand}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            ))}
+
+                          <path
+                            d={generatePath(beatCurve, true)}
+                            className={styles.beatFill}
+                            style={{
+                              clipPath: beatDrawn
+                                ? "inset(0 0% 0 0)"
+                                : "inset(0 100% 0 0)",
+                              transition: "clip-path 600ms ease-out",
+                            }}
                           />
-                        ))}
-
-                      {zonesVisible &&
-                        collisions.slice(0, 10).map((zone) => (
-                          <rect
-                            key={`collision-${zone.startFreq}-${zone.endFreq}`}
-                            x={logScale(zone.startFreq)}
-                            y={0}
-                            width={Math.max(
-                              0.25,
-                              logScale(zone.endFreq) - logScale(zone.startFreq)
-                            )}
-                            height={100}
-                            className={styles.collisionBand}
-                            vectorEffect="non-scaling-stroke"
+                          <path
+                            d={generatePath(beatCurve, false)}
+                            className={styles.beatStroke}
+                            style={{
+                              clipPath: beatDrawn
+                                ? "inset(0 0% 0 0)"
+                                : "inset(0 100% 0 0)",
+                              transition: "clip-path 600ms ease-out",
+                            }}
                           />
-                        ))}
-
-                      <path
-                        d={generatePath(beatCurve, true)}
-                        className={styles.beatFill}
-                        style={{
-                          clipPath: beatDrawn
-                            ? "inset(0 0% 0 0)"
-                            : "inset(0 100% 0 0)",
-                          transition: "clip-path 600ms ease-out",
-                        }}
-                      />
-                      <path
-                        d={generatePath(beatCurve, false)}
-                        className={styles.beatStroke}
-                        style={{
-                          clipPath: beatDrawn
-                            ? "inset(0 0% 0 0)"
-                            : "inset(0 100% 0 0)",
-                          transition: "clip-path 600ms ease-out",
-                        }}
-                      />
-                      <path
-                        d={generatePath(vocalCurve, false)}
-                        className={styles.vocalStroke}
-                        style={{
-                          clipPath: vocalDrawn
-                            ? "inset(0 0% 0 0)"
-                            : "inset(0 100% 0 0)",
-                          transition: "clip-path 600ms ease-out",
-                        }}
-                      />
-
-                      {hover && (
-                        <>
-                          <line
-                            x1={hover.x}
-                            x2={hover.x}
-                            y1="0"
-                            y2="100"
-                            className={styles.hoverLine}
-                            vectorEffect="non-scaling-stroke"
+                          <path
+                            d={generatePath(vocalCurve, false)}
+                            className={styles.vocalStroke}
+                            style={{
+                              clipPath: vocalDrawn
+                                ? "inset(0 0% 0 0)"
+                                : "inset(0 100% 0 0)",
+                              transition: "clip-path 600ms ease-out",
+                            }}
                           />
-                          <line
-                            x1="0"
-                            x2="100"
-                            y1={hover.y}
-                            y2={hover.y}
-                            className={styles.hoverLine}
-                            vectorEffect="non-scaling-stroke"
-                          />
-                        </>
-                      )}
-                    </svg>
 
-                    <div className={styles.yAxis}>
-                      {[0, -20, -40, -60, -80].map((db) => (
-                        <span key={db} style={{ top: `${dbToY(db)}%` }}>
-                          {db}
-                        </span>
-                      ))}
-                    </div>
+                          {hover && (
+                            <>
+                              <line
+                                x1={hover.x}
+                                x2={hover.x}
+                                y1="0"
+                                y2="100"
+                                className={styles.hoverLine}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                              <line
+                                x1="0"
+                                x2="100"
+                                y1={hover.y}
+                                y2={hover.y}
+                                className={styles.hoverLine}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            </>
+                          )}
+                        </svg>
 
-                    {hover && (
-                      <div
-                        className={styles.hoverTooltip}
-                        style={{
-                          left: `${hover.x}%`,
-                          top: `${hover.y}%`,
-                        }}
-                      >
-                        <span>{formatFrequency(hover.frequency)}</span>
-                        <span>Cursor {formatDb(hover.cursorDb)}</span>
-                        <span>Vocal {formatDb(hover.vocalDb)}</span>
-                        <span>Beat {formatDb(hover.beatDb)}</span>
+                        <div className={styles.yAxis}>
+                          {[0, -20, -40, -60, -80].map((db) => (
+                            <span key={db} style={{ top: `${dbToY(db)}%` }}>
+                              {db}
+                            </span>
+                          ))}
+                        </div>
+
+                        {hover && (
+                          <div
+                            className={styles.hoverTooltip}
+                            style={{
+                              left: `${hover.x}%`,
+                              top: `${hover.y}%`,
+                            }}
+                          >
+                            <span>{formatFrequency(hover.frequency)}</span>
+                            <span>Cursor {formatDb(hover.cursorDb)}</span>
+                            <span>Vocal {formatDb(hover.vocalDb)}</span>
+                            <span>Beat {formatDb(hover.beatDb)}</span>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className={styles.timelineView}>
+                        <div className={styles.timelineHeader}>
+                          <span>Measured zones</span>
+                          <span>{timelineZones.length || 0} total</span>
+                        </div>
+                        <div className={styles.timelineRows}>
+                          {timelineZones.length > 0 ? (
+                            timelineZones.map((zone) => (
+                              <div
+                                key={`${zone.kind}-${zone.startFreq}-${zone.endFreq}`}
+                                className={styles.timelineRow}
+                              >
+                                <span className={styles.timelineLabel}>
+                                  {zone.label}
+                                </span>
+                                <div className={styles.timelineTrack}>
+                                  <span
+                                    className={
+                                      zone.kind === "collision"
+                                        ? styles.timelineCollision
+                                        : styles.timelinePocket
+                                    }
+                                    style={{
+                                      left: `${logScale(zone.startFreq)}%`,
+                                      width: `${Math.max(
+                                        2,
+                                        logScale(zone.endFreq) - logScale(zone.startFreq)
+                                      )}%`,
+                                    }}
+                                  />
+                                </div>
+                                <span className={styles.timelineFreq}>
+                                  {formatFrequency(zone.centerFreq)}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className={styles.timelineEmpty}>
+                              {hasBeat && hasVocal
+                                ? "No measured fight zones yet."
+                                : missingPrompt}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -1042,26 +1257,19 @@ export default function MixRoomPage() {
 
                   <div className={styles.matchScoreSection}>
                     <div className={styles.matchScoreLeft}>
-                      <div
-                        className={styles.matchNumber}
-                        style={{
-                          color:
-                            displayScore > 70
-                              ? "var(--text-primary)"
-                              : displayScore >= 50
-                                ? "var(--accent)"
-                                : "rgba(220,50,50,0.9)",
-                          textShadow:
-                            displayScore > 70
-                              ? "0 0 16px rgba(255,255,255,0.4)"
-                              : displayScore >= 50
-                                ? "0 0 16px rgba(215,255,63,0.22)"
-                                : "0 0 16px rgba(220,50,50,0.4)",
-                        }}
-                      >
-                        {displayScore}
-                      </div>
                       <div className={styles.matchLabel}>Pocket Match</div>
+                      <div className={styles.matchNumberRow}>
+                        <div
+                          className={styles.matchNumber}
+                          style={{
+                            color: scoreTone(displayScore),
+                            textShadow: scoreGlow(displayScore),
+                          }}
+                        >
+                          {displayScore}
+                        </div>
+                        <div className={styles.matchOutOf}>out of 100</div>
+                      </div>
                     </div>
                     <div className={styles.matchSubtext}>
                       {report?.summary || statusText}
@@ -1073,14 +1281,51 @@ export default function MixRoomPage() {
                     <div className={styles.explanationText}>
                       {report?.explanation ||
                         (isLoading
-                          ? "Claude is reading the top collision zones..."
-                          : "Run Mix Room with a vocal and beat to get a plain-English move.")}
+                          ? "MimiQ is comparing the vocal and beat so it can explain the strongest fight spot."
+                          : missingPrompt ??
+                            "Run Mix Room with a vocal and beat to get a plain-English move.")}
                     </div>
                   </div>
                 </div>
               </div>
 
               <div className={styles.rightColumn}>
+                <div className={styles.uploadPanel}>
+                  <label
+                    className={`${styles.mixUploadSlot} ${
+                      hasVocal ? styles.mixUploadSlotReady : ""
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      accept=".wav,.mp3"
+                      onChange={(event) => handleAudioUpload("vocal", event)}
+                    />
+                    <span className={styles.mixUploadKicker}>Vocal</span>
+                    <strong>
+                      {vocalUploadLabel
+                        ? shortFileName(vocalUploadLabel)
+                        : "Upload vocal"}
+                    </strong>
+                    <em>{hasVocal ? "Ready" : "Required before analysis"}</em>
+                  </label>
+                  <label
+                    className={`${styles.mixUploadSlot} ${
+                      hasBeat ? styles.mixUploadSlotReady : ""
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      accept=".wav,.mp3"
+                      onChange={(event) => handleAudioUpload("beat", event)}
+                    />
+                    <span className={styles.mixUploadKicker}>Beat</span>
+                    <strong>
+                      {beatUploadLabel ? shortFileName(beatUploadLabel) : "Upload beat"}
+                    </strong>
+                    <em>{hasBeat ? "Ready" : "Required before analysis"}</em>
+                  </label>
+                </div>
                 <div className={styles.reportHeader}>
                   <span>Collision Report</span>
                   {report && (
@@ -1126,12 +1371,20 @@ export default function MixRoomPage() {
                     <div className={styles.emptyReport}>
                       {hasBeat && hasVocal
                         ? "No major collision cuts needed yet."
-                        : "Upload both files in Sandbox to unlock Mix Room."}
+                        : missingPrompt}
                     </div>
                   )}
                 </div>
               </div>
             </div>
+            <MixRoomTransport
+              sourceUrl={playbackUrl}
+              hasSource={!!sourceUrl}
+              trackName={transportTrackName}
+              sourceLabel={transportSourceLabel}
+              statusText={statusText}
+              matchScore={matchScore}
+            />
           </div>
         </GateScreen>
       </div>

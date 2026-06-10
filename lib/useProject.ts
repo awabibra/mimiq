@@ -64,7 +64,8 @@ export function isMixRoomReport(report: unknown): report is MixRoomReport {
   const value = report as Partial<MixRoomReport>;
 
   return (
-    value.analysis_version === "browser_fft_v1" &&
+    (value.analysis_version === "browser_fft_v1" ||
+      value.analysis_version === "mix_room_v1") &&
     Array.isArray(value.collisions) &&
     Array.isArray(value.pockets) &&
     Array.isArray(value.eq_cuts)

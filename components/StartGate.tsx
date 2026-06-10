@@ -15,7 +15,7 @@ export function StartGate({ children }: { children: ReactNode }) {
       if (!alive) return;
 
       if (auth) {
-        router.replace("/projects");
+        router.replace("/entry");
         return;
       }
 

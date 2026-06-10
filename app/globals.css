@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Shrikhand&family=Titan+One&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Shrikhand&family=Titan+One&display=swap');
 @import "tailwindcss";
 
 /* ============================================================
@@ -8,23 +8,33 @@
 
 :root {
   /* ── Backgrounds ── */
-  --bg-base: #0A0A0C;
-  --bg-surface: #161618;
+  --bg-base: #0A0A0B;
+  --bg-surface: #111113;
+  --bg-elevated: #18181C;
+  --bg-glass: rgba(17, 17, 19, 0.74);
 
   /* ── Borders ── */
-  --border-default: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.04);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-active: rgba(255, 255, 255, 0.1);
+  --border-default: var(--border-subtle);
+  --border-hover: var(--border-active);
 
   /* ── Text ── */
-  --text-primary: #F2F2F0;
-  --text-secondary: #888884;
-  --text-tertiary: #4A4A47;
+  --text-primary: #F0F0F0;
+  --text-secondary: #6B6B72;
+  --text-tertiary: #3A3A42;
 
   /* ── Era accent (default: Golden / hip-hop) ── */
-  --accent: #D4A84B;
+  --accent: #C8F135;
+  --accent-lime: #C8F135;
+  --accent-lime-dim: rgba(200, 241, 53, 0.13);
+  --status-ready: #C8F135;
+  --status-active: #F5A623;
+  --status-mixing: #7B61FF;
 
   /* ── Typography ── */
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   --fs-display: 22px;
   --fs-heading: 15px;
   --fs-body: 13px;
@@ -50,18 +60,26 @@
   --radius-pill: 20px;
 
   /* ── Motion ── */
+  --ease-snap: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-fade: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-instant: 80ms;
+  --dur-quick: 150ms;
+  --dur-normal: 250ms;
+  --dur-slow: 400ms;
   /* Micro: hover states, button colors, pill selections (180ms) */
-  --transition: 180ms ease-out;
+  --transition: var(--dur-quick) var(--ease-snap);
   /* Element: cards appearing, panels sliding, content switching (280ms) */
-  --transition-element: 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-element: var(--dur-normal) var(--ease-spring);
   /* Page: navigating between views — opacity + translateY (320ms) */
-  --transition-page: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-page: var(--dur-slow) var(--ease-fade);
 }
 
 /* ── Tailwind theme bridge ── */
 @theme inline {
   --color-bg-base: var(--bg-base);
   --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
   --color-border-default: var(--border-default);
   --color-border-hover: var(--border-hover);
   --color-text-primary: var(--text-primary);

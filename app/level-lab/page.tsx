@@ -7,11 +7,11 @@ import { Sidebar } from "@/components/Sidebar";
 import { ProjectGate } from "@/components/ProjectGate";
 import { useStore } from "@/lib/store";
 import { useAudioStore } from "@/lib/useAudioStore";
-import { saveProjectPatch } from "@/lib/projects";
+import { downloadProjectAudio, saveProjectPatch } from "@/lib/projects";
 import { getLatestGeneratedChain, useProject } from "@/lib/useProject";
 import { eras, defaultEra } from "@/lib/eras";
 import styles from "./page.module.css";
-import type { AudioMetrics, LevelLabResponse, LevelMetrics } from "@/lib/types";
+import type { AudioMetrics, LevelLabResponse } from "@/lib/types";
 
 interface GainPoint {
   time: number;
@@ -23,108 +23,8 @@ interface LevelLabServerResponse extends Partial<LevelLabResponse> {
   message?: string;
 }
 
-async function analyzeAudioClient(file: File): Promise<LevelMetrics> {
-  const AudioCtx =
-    window.AudioContext ||
-    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
-
-  if (!AudioCtx) {
-    throw new Error("Web Audio API is unavailable in this browser.");
-  }
-
-  const ctx = new AudioCtx();
-  const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
-  const data = buffer.getChannelData(0);
-  const sampleRate = buffer.sampleRate;
-
-  const blockSize = Math.floor(0.4 * sampleRate);
-  const hopSize = Math.floor(0.1 * sampleRate);
-  const blocks: number[] = [];
-
-  for (let i = 0; i + blockSize < data.length; i += hopSize) {
-    const block = data.slice(i, i + blockSize);
-    const rms = Math.sqrt(block.reduce((s, x) => s + x * x, 0) / block.length);
-    const loudness = -0.691 + 10 * Math.log10(rms * rms + 1e-10);
-    if (loudness > -70) blocks.push(loudness);
-  }
-
-  const integrated = blocks.length
-    ? -0.691 +
-      10 *
-        Math.log10(
-          blocks.reduce((s, b) => s + Math.pow(10, b / 10), 0) /
-            blocks.length
-        )
-    : -60;
-
-  const sorted = [...blocks].sort((a, b) => a - b);
-  const lra =
-    sorted.length > 10
-      ? sorted[Math.floor(sorted.length * 0.95)] -
-        sorted[Math.floor(sorted.length * 0.1)]
-      : 0;
-
-  const peak = data.reduce((max, s) => Math.max(max, Math.abs(s)), 0);
-  const truePeak = 20 * Math.log10(peak + 1e-10);
-
-  const step = Math.max(1, Math.floor(blocks.length / 200));
-  const gainRide = blocks.filter((_, i) => i % step === 0).slice(0, 200);
-
-  await ctx.close();
-
-  return {
-    lufs: Math.round(integrated * 10) / 10,
-    dynamicRange: Math.round(lra * 10) / 10,
-    truePeak: Math.round(truePeak * 10) / 10,
-    gainRide,
-  };
-}
-
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
-
-function scoreFromMetrics(metrics: LevelMetrics) {
-  const loudnessScore = Math.max(0, 35 - Math.abs(metrics.lufs - -14) * 4);
-  const dynamicsScore = Math.max(0, 35 - Math.abs(metrics.dynamicRange - 6) * 5);
-  const peakScore = metrics.truePeak <= -1 ? 20 : Math.max(0, 20 - (metrics.truePeak + 1) * 8);
-  const spikePenalty = metrics.gainRide.filter((point) => point > -6).length * 1.5;
-
-  return Math.round(clamp(loudnessScore + dynamicsScore + peakScore + 10 - spikePenalty, 0, 100));
-}
-
-function buildClientReport(metrics: LevelMetrics): LevelLabResponse {
-  const spikeCount = metrics.gainRide.filter((point) => point > -6).length;
-
-  return {
-    sessionScore: scoreFromMetrics(metrics),
-    loudnessVerdict:
-      metrics.lufs > -10
-        ? "Too loud for a vocal stem"
-        : metrics.lufs < -22
-          ? "Still too quiet"
-          : "Loudness is in range",
-    dynamicsVerdict:
-      metrics.dynamicRange > 10
-        ? "Dynamics still need control"
-        : metrics.dynamicRange < 3
-          ? "Dynamics are over-compressed"
-          : "Dynamics are controlled",
-    brightnessVerdict:
-      metrics.truePeak > -1
-        ? "True peak is too hot"
-        : "True peak has headroom",
-    gainRideCallout:
-      spikeCount > 0
-        ? `${spikeCount} loud point${spikeCount === 1 ? "" : "s"} cross -6 dBFS.`
-        : "No gain ride points cross -6 dBFS.",
-    nextStep:
-      metrics.truePeak > -1
-        ? "Pull the vocal down before limiting."
-        : "Level-match against the beat and print again.",
-    processedMetrics: metrics,
-  };
-}
 
 function gainRideToPoints(gainRide: number[] | undefined): GainPoint[] {
   const points = gainRide ?? [];
@@ -133,6 +33,182 @@ function gainRideToPoints(gainRide: number[] | undefined): GainPoint[] {
     time: points.length <= 1 ? 0 : index / (points.length - 1),
     dbfs,
   }));
+}
+
+function isLevelLabReport(data: LevelLabServerResponse): data is LevelLabResponse {
+  return (
+    typeof data.sessionScore === "number" &&
+    typeof data.loudnessVerdict === "string" &&
+    typeof data.dynamicsVerdict === "string" &&
+    typeof data.brightnessVerdict === "string" &&
+    typeof data.gainRideCallout === "string" &&
+    typeof data.nextStep === "string" &&
+    !!data.processedMetrics &&
+    typeof data.processedMetrics.lufs === "number" &&
+    typeof data.processedMetrics.dynamicRange === "number" &&
+    typeof data.processedMetrics.truePeak === "number" &&
+    Array.isArray(data.processedMetrics.gainRide) &&
+    !!data.delta &&
+    (data.delta.verdict === "improved" ||
+      data.delta.verdict === "regressed" ||
+      data.delta.verdict === "unknown") &&
+    typeof data.delta.lufs_delta === "number" &&
+    typeof data.delta.dynamic_range_delta === "number"
+  );
+}
+
+function isBrowserPlayableUrl(source: string | null) {
+  if (!source) return false;
+  return (
+    source.startsWith("blob:") ||
+    source.startsWith("data:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://")
+  );
+}
+
+async function loadAudioFile(source: string, filename: string) {
+  if (
+    source.startsWith("blob:") ||
+    source.startsWith("data:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://")
+  ) {
+    const res = await fetch(source);
+    const blob = await res.blob();
+    return new File([blob], filename, {
+      type: blob.type || "audio/mpeg",
+    });
+  }
+
+  return downloadProjectAudio(source, filename);
+}
+
+function LevelLabTransport({
+  rawUrl,
+  processedUrl,
+  hasProcessed,
+  score,
+  trackName,
+}: {
+  rawUrl: string | null;
+  processedUrl: string | null;
+  hasProcessed: boolean;
+  score: number | null;
+  trackName: string;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const playbackUrl = isBrowserPlayableUrl(
+    hasProcessed && processedUrl ? processedUrl : rawUrl
+  )
+    ? hasProcessed && processedUrl
+      ? processedUrl
+      : rawUrl
+    : null;
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setPlaying(false);
+      setDuration(0);
+      setCurrentTime(0);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [playbackUrl]);
+
+  const togglePlay = async () => {
+    const audio = audioRef.current;
+    if (!audio || !playbackUrl) return;
+
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+      return;
+    }
+
+    await audio.play().catch(() => undefined);
+    setPlaying(!audio.paused);
+  };
+
+  const progress = duration > 0 ? currentTime / duration : 0;
+  const bars = Array.from({ length: 34 }, (_, index) => {
+    const base = 18 + ((index * 19) % 42);
+    const active = index / 34 <= progress;
+    return (
+      <span
+        key={index}
+        className={active ? styles.waveformBarActive : ""}
+        style={{ height: `${base}%` }}
+      />
+    );
+  });
+
+  const sourceStatus = playbackUrl
+    ? hasProcessed
+      ? "processed export monitor"
+      : "source vocal monitor"
+    : rawUrl || processedUrl
+      ? "project source stored"
+      : "no audio loaded";
+
+  return (
+    <section className={styles.transportBar} aria-label="Audio transport">
+      <audio
+        ref={audioRef}
+        src={playbackUrl ?? undefined}
+        preload="metadata"
+        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onEnded={() => setPlaying(false)}
+      />
+
+      <div className={styles.transportTrack}>
+        <button
+          type="button"
+          className={styles.playButton}
+          onClick={togglePlay}
+          disabled={!playbackUrl}
+          aria-label={playing ? "Pause monitor audio" : "Play monitor audio"}
+        >
+          {playing ? "II" : ">"}
+        </button>
+        <span>
+          <strong>{trackName}</strong>
+          <em>{sourceStatus}</em>
+        </span>
+      </div>
+
+      <div className={styles.transportWaveform}>
+        <div className={styles.waveformBars}>{bars}</div>
+        <input
+          type="range"
+          min="0"
+          max={duration || 0}
+          step="0.01"
+          value={currentTime}
+          onChange={(event) => {
+            const nextTime = Number(event.target.value);
+            setCurrentTime(nextTime);
+            if (audioRef.current) audioRef.current.currentTime = nextTime;
+          }}
+          disabled={!playbackUrl || duration === 0}
+          aria-label="Scrub monitor audio"
+        />
+      </div>
+
+      <div className={styles.transportTools}>
+        <span className={styles.transportStatus}>
+          {hasProcessed ? "processed compared" : "waiting for processed vocal"}
+        </span>
+        <span className={styles.transportScore}>
+          {score === null ? "--" : `${score}/100`}
+        </span>
+      </div>
+    </section>
+  );
 }
 
 export default function LevelLabPage() {
@@ -147,6 +223,8 @@ export default function LevelLabPage() {
   const { 
     analysisResult, 
     processedAnalysis, 
+    processedFileUrl,
+    vocalFileUrl,
     setSession 
   } = useAudioStore();
 
@@ -154,6 +232,9 @@ export default function LevelLabPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [typewriterText, setTypewriterText] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [uploadWidgetMode, setUploadWidgetMode] = useState<
+    "open" | "closing" | "mini" | "opening"
+  >("open");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Animation states for STATE B
@@ -163,13 +244,39 @@ export default function LevelLabPage() {
   const [gainVisible, setGainVisible] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
 
-  const rawMetrics: AudioMetrics | null =
-    analysisResult?.metrics ?? latestProjectChain?.chain_data.measurements ?? null;
   const levelLabData: LevelLabResponse | null =
     (processedAnalysis as LevelLabResponse | null) ??
     (project?.level_lab_report as LevelLabResponse | null);
 
+  const currentVocal =
+    project?.vocal_versions?.[project.current_vocal_index] ?? null;
+  const rawAudioUrl = currentVocal?.url ?? vocalFileUrl ?? null;
+  const rawFilename = currentVocal?.filename ?? "raw-vocal.wav";
+  const rawMetrics: AudioMetrics | LevelLabResponse["rawMetrics"] | null =
+    levelLabData?.rawMetrics ??
+    analysisResult?.metrics ??
+    latestProjectChain?.chain_data.measurements ??
+    null;
+  const hasRawVocal = !!rawAudioUrl;
   const hasProcessed = !!levelLabData;
+  const processedAudioUrl = processedFileUrl ?? project?.stem_split_url ?? null;
+  const transportTrackName =
+    currentVocal?.label ?? project?.name ?? "Level Lab Monitor";
+  const levelScore = levelLabData?.sessionScore ?? null;
+  const metricStatus = isProcessing ? "Reading" : hasProcessed ? "Ready" : "Waiting";
+  const rawMissingMessage =
+    "Upload or analyze the raw vocal in Sandbox first. Level Lab needs the original take as the before reference, then it can compare your processed export.";
+
+  const closeUploadWidget = () => {
+    if (isProcessing) return;
+    setUploadWidgetMode("closing");
+    window.setTimeout(() => setUploadWidgetMode("mini"), 320);
+  };
+
+  const openUploadWidget = () => {
+    setUploadWidgetMode("opening");
+    window.setTimeout(() => setUploadWidgetMode("open"), 260);
+  };
 
   // Typewriter effect during processing
   useEffect(() => {
@@ -228,68 +335,31 @@ export default function LevelLabPage() {
     }
   };
 
-  const mergeServerReport = (
-    clientReport: LevelLabResponse,
-    serverData: LevelLabServerResponse
-  ): LevelLabResponse => {
-    const serverMetrics = serverData.processedMetrics;
-
-    return {
-      ...clientReport,
-      sessionScore: serverData.sessionScore ?? clientReport.sessionScore,
-      loudnessVerdict:
-        serverData.loudnessVerdict ?? clientReport.loudnessVerdict,
-      dynamicsVerdict:
-        serverData.dynamicsVerdict ?? clientReport.dynamicsVerdict,
-      brightnessVerdict:
-        serverData.brightnessVerdict ?? clientReport.brightnessVerdict,
-      gainRideCallout:
-        serverData.gainRideCallout ?? clientReport.gainRideCallout,
-      nextStep: serverData.nextStep ?? clientReport.nextStep,
-      processedMetrics: {
-        ...clientReport.processedMetrics,
-        ...serverMetrics,
-        gainRide: serverMetrics?.gainRide?.length
-          ? serverMetrics.gainRide
-          : clientReport.processedMetrics.gainRide,
-        truePeak:
-          serverMetrics?.truePeak ?? clientReport.processedMetrics.truePeak,
-      },
-    };
-  };
-
   const handleFileUpload = async (file: File) => {
-    if (!rawMetrics) {
-      setErrorText("Analyze a raw vocal in Sandbox before using Level Lab.");
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".wav") && !lowerName.endsWith(".mp3")) {
+      setErrorText("Drop a WAV or MP3 processed vocal export.");
       return;
     }
 
+    if (!hasRawVocal || !rawAudioUrl) {
+      setErrorText(rawMissingMessage);
+      return;
+    }
+
+    setUploadWidgetMode("open");
     setIsProcessing(true);
     setErrorText(null);
-
-    let clientReport: LevelLabResponse;
-    let processedFileUrl: string;
+    const processedFileUrl = URL.createObjectURL(file);
 
     try {
-      const clientMetrics = await analyzeAudioClient(file);
-      clientReport = buildClientReport(clientMetrics);
-      processedFileUrl = URL.createObjectURL(file);
-
-      saveLevelLabReport(clientReport, processedFileUrl);
-      setIsProcessing(false);
-    } catch (e) {
-      console.error(e);
-      setIsProcessing(false);
-      setErrorText(
-        e instanceof Error ? e.message : "Level Lab could not analyze that file."
-      );
-      return;
-    }
-
-    try {
+      const rawFile = await loadAudioFile(rawAudioUrl, rawFilename);
       const formData = new FormData();
+      formData.append("rawFile", rawFile);
       formData.append("processedFile", file);
-      formData.append("rawMetrics", JSON.stringify(rawMetrics));
+      if (rawMetrics) {
+        formData.append("rawMetrics", JSON.stringify(rawMetrics));
+      }
       formData.append("daw", daw || "Logic Pro");
       formData.append("era", activeEra.id);
 
@@ -301,12 +371,22 @@ export default function LevelLabPage() {
       const data = (await res.json()) as LevelLabServerResponse;
 
       if (!res.ok) throw new Error(data.message || "Processing failed");
-      if (data.status === "client_only") return;
+      if (data.status === "client_only") {
+        throw new Error(data.message || "Audio service unavailable.");
+      }
+      if (!isLevelLabReport(data)) {
+        throw new Error("Level Lab response did not include measured deltas.");
+      }
 
-      saveLevelLabReport(mergeServerReport(clientReport, data), processedFileUrl);
-
+      saveLevelLabReport(data, processedFileUrl);
     } catch (e) {
       console.warn("[level-lab] Server review unavailable.", e);
+      URL.revokeObjectURL(processedFileUrl);
+      setErrorText(
+        e instanceof Error ? e.message : "Level Lab could not analyze that file."
+      );
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -409,16 +489,173 @@ export default function LevelLabPage() {
       />
       <GateScreen>
         <div className={styles.contentArea}>
-          <div className={styles.header}>
-            <div className={styles.title}>Level Lab</div>
-          </div>
-          <div className={styles.divider} />
+          <section className={styles.metricsBar} aria-label="Level Lab metrics">
+            <div className={styles.metricCell}>
+              <span className={styles.metricIcon} aria-hidden="true">
+                ||
+              </span>
+              <div>
+                <span className={styles.metricLabel}>Before LUFS</span>
+                <strong className={styles.metricValue}>
+                  -{formatVal(rawMetrics?.lufs)}
+                </strong>
+              </div>
+            </div>
+            <div className={styles.metricCell}>
+              <span className={styles.metricIcon} aria-hidden="true">
+                DR
+              </span>
+              <div>
+                <span className={styles.metricLabel}>Dynamic range</span>
+                <strong className={styles.metricValue}>
+                  {formatVal(rawMetrics?.dynamicRange)} dB
+                </strong>
+              </div>
+            </div>
+            <div className={styles.metricCell}>
+              <span className={styles.metricIcon} aria-hidden="true">
+                Hz
+              </span>
+              <div>
+                <span className={styles.metricLabel}>Centroid</span>
+                <strong className={styles.metricValue}>
+                  {formatVal(rawMetrics?.spectralCentroid, true)} kHz
+                </strong>
+              </div>
+            </div>
+            <div className={styles.metricCell}>
+              <span className={styles.metricIcon} aria-hidden="true">
+                ++
+              </span>
+              <div>
+                <span className={styles.metricLabel}>Level score</span>
+                <strong className={styles.metricValue}>
+                  {levelScore === null ? metricStatus : `${levelScore}/100`}
+                </strong>
+              </div>
+            </div>
+          </section>
 
           <div className={styles.mainContent}>
           {!hasProcessed ? (
             /* STATE A */
+            <>
+            <div
+              className={`${styles.levelLabPreview} ${
+                uploadWidgetMode === "mini"
+                  ? styles.levelLabPreviewLive
+                  : uploadWidgetMode === "closing"
+                    ? styles.levelLabPreviewWaking
+                    : styles.levelLabPreviewBlurred
+              }`}
+              aria-label="Level Lab preview"
+            >
+                <div className={styles.previewComparisonBar}>
+                  <div className={`${styles.previewCompCol} ${styles.previewCompLeft}`}>
+                    <div className={styles.compLabel}>BEFORE</div>
+                    <div className={styles.compMetrics}>
+                      <div className={styles.detailItem}>
+                        <div className={styles.detailLabel}>LUFS</div>
+                        <div className={styles.detailValue}>-{formatVal(rawMetrics?.lufs)}</div>
+                      </div>
+                      <div className={styles.detailItem}>
+                        <div className={styles.detailLabel}>Dynamic Range</div>
+                        <div className={styles.detailValue}>{formatVal(rawMetrics?.dynamicRange)}</div>
+                      </div>
+                      <div className={styles.detailItem}>
+                        <div className={styles.detailLabel}>Centroid</div>
+                        <div className={styles.detailValue}>{formatVal(rawMetrics?.spectralCentroid, true)}k</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className={`${styles.previewCompCol} ${styles.previewCompCenter}`}>
+                    <div className={styles.compLabel}>SCORE</div>
+                    <div className={styles.previewScore}>--</div>
+                    <div className={styles.compSubtext}>Awaiting export</div>
+                  </div>
+
+                  <div className={`${styles.previewCompCol} ${styles.previewCompRight}`}>
+                    <div className={styles.compLabel}>AFTER</div>
+                    <div className={styles.previewAfterMetrics}>
+                      <div className={styles.previewMiniCard}>
+                        <div className={styles.miniCardLabel}>LUFS</div>
+                        <div className={styles.previewMiniValue}>--</div>
+                      </div>
+                      <div className={styles.previewMiniCard}>
+                        <div className={styles.miniCardLabel}>Dynamic Range</div>
+                        <div className={styles.previewMiniValue}>--</div>
+                      </div>
+                      <div className={styles.previewMiniCard}>
+                        <div className={styles.miniCardLabel}>True Peak</div>
+                        <div className={styles.previewMiniValue}>--</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={styles.previewBottomPanels}>
+                  <div className={styles.previewLeftPanel}>
+                    <div className={styles.panelLabel}>GAIN RIDE</div>
+                    <div className={styles.previewGainVisualizer}>
+                      <div className={styles.axisLabel} style={{ top: "14%" }}>-6 dBFS</div>
+                      <div className={styles.axisLabel} style={{ top: "44%" }}>-18 dBFS</div>
+                      <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        <line x1="0" y1="15" x2="100" y2="15" stroke="rgba(255,255,255,0.09)" strokeWidth="1" strokeDasharray="2,2" vectorEffect="non-scaling-stroke" />
+                        <line x1="0" y1="45" x2="100" y2="45" stroke="rgba(255,255,255,0.09)" strokeWidth="1" strokeDasharray="2,2" vectorEffect="non-scaling-stroke" />
+                        <path
+                          d="M 0 58 C 12 45 20 52 30 38 S 50 48 60 31 S 76 52 88 42 S 96 46 100 35"
+                          fill="none"
+                          stroke="rgba(255,255,255,0.14)"
+                          strokeWidth="1"
+                          strokeDasharray="3 5"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </svg>
+                    </div>
+                    <div className={styles.previewCallout}>Measured deltas will appear after the processed vocal is checked.</div>
+                  </div>
+
+                  <div className={styles.previewRightPanel}>
+                    <div className={styles.panelLabel}>WHAT CHANGED</div>
+                    <div className={styles.previewDeltaCards}>
+                      {["Loudness", "Dynamic Range", "True Peak"].map((name) => (
+                        <div className={styles.previewDeltaCard} key={name}>
+                          <div className={styles.deltaCardTop}>
+                            <div className={styles.deltaName}>{name}</div>
+                            <div className={styles.previewDeltaValue}>{"-- -> --"}</div>
+                          </div>
+                          <div className={styles.deltaBarContainer}>
+                            <div className={styles.previewDeltaBar} />
+                          </div>
+                        </div>
+                      ))}
+                      <div className={styles.previewSummaryCard}>
+                        <div className={styles.summaryTop}>NEXT STEP</div>
+                        <div className={styles.summaryContent}>Drop the processed vocal to compare source and export.</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            {uploadWidgetMode !== "mini" && (
             <div className={styles.uploadCardWrapper}>
-              <div className={styles.uploadCard}>
+              <div
+                className={`${styles.uploadCard} ${
+                  uploadWidgetMode === "closing" ? styles.uploadCardClosing : ""
+                } ${
+                  uploadWidgetMode === "opening" ? styles.uploadCardOpening : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  className={styles.dismissUploadButton}
+                  onClick={closeUploadWidget}
+                  disabled={isProcessing}
+                  aria-label="Collapse upload card"
+                >
+                  X
+                </button>
                 <div className={styles.pulseLines}>
                   <div className={styles.pulseLineTop} />
                   <div className={styles.pulseLineBottom} />
@@ -426,11 +663,15 @@ export default function LevelLabPage() {
                 
                 <div className={styles.uploadHeading}>Drop your processed vocal</div>
                 <div className={styles.uploadBody}>
-                  Apply the chain in your DAW, export the vocal, and drop it here. MimiQ will show you exactly what changed.
+                  {hasRawVocal
+                    ? "Apply the chain in your DAW, export the vocal, and drop it here. MimiQ will compare it against the raw vocal from this project."
+                    : rawMissingMessage}
                 </div>
 
-                {errorText && (
-                  <div className={styles.deltaInterpretation}>{errorText}</div>
+                {(!hasRawVocal || errorText) && (
+                  <div className={styles.deltaInterpretation}>
+                    {errorText ?? rawMissingMessage}
+                  </div>
                 )}
 
                 {!isProcessing ? (
@@ -442,14 +683,16 @@ export default function LevelLabPage() {
                       onDrop={onDrop}
                       onClick={() => fileInputRef.current?.click()}
                     >
-                      <span className={styles.dropZoneText}>Drop .wav or .mp3</span>
+                      <span className={styles.dropZoneText}>
+                        {hasRawVocal ? "Drop .wav or .mp3" : "Raw vocal required first"}
+                      </span>
                     </div>
                     <div className={styles.browseLink} onClick={() => fileInputRef.current?.click()}>
                       Browse files
                     </div>
                     <input 
                       type="file" 
-                      accept="audio/*" 
+                      accept=".wav,.mp3"
                       ref={fileInputRef} 
                       style={{ display: 'none' }} 
                       onChange={onFileInput}
@@ -473,9 +716,29 @@ export default function LevelLabPage() {
                 </div>
               </div>
             </div>
+            )}
+            {uploadWidgetMode === "mini" && !isProcessing && (
+              <button
+                type="button"
+                className={styles.uploadMiniWidget}
+                onClick={openUploadWidget}
+                aria-label="Open processed vocal upload"
+              >
+                <span className={styles.miniUploadIcon} aria-hidden="true" />
+                <span className={styles.uploadMiniText}>Drop processed vocal</span>
+                {rawMetrics && (
+                  <span className={styles.uploadMiniMetrics}>
+                    <span><em>LUFS</em> -{formatVal(rawMetrics.lufs)}</span>
+                    <span><em>DR</em> {formatVal(rawMetrics.dynamicRange)}</span>
+                    <span><em>CENT</em> {formatVal(rawMetrics.spectralCentroid, true)}k</span>
+                  </span>
+                )}
+              </button>
+            )}
+            </>
           ) : (
             /* STATE B */
-            <>
+            <div className={styles.analysisWorkspace}>
               <div className={styles.topSection}>
                 <div className={styles.comparisonBar}>
                   
@@ -528,9 +791,9 @@ export default function LevelLabPage() {
                         </div>
                       </div>
                       <div className={styles.miniCard}>
-                        <div className={styles.miniCardLabel}>True Peak</div>
-                        <div className={styles.miniCardValue} style={{ color: getDeltaColor(0, levelLabData!.processedMetrics.truePeak, 'peak') }}>
-                          {formatDb(levelLabData!.processedMetrics.truePeak)}
+                        <div className={styles.miniCardLabel}>Brightness</div>
+                        <div className={styles.miniCardValue} style={{ color: getDeltaColor(rawMetrics?.spectralCentroid || 2600, levelLabData!.processedMetrics.spectralCentroid ?? 2600, 'cent') }}>
+                          {formatVal(levelLabData!.processedMetrics.spectralCentroid, true)}k
                         </div>
                       </div>
                     </div>
@@ -638,11 +901,11 @@ export default function LevelLabPage() {
                         metric: 'dr' as const
                       },
                       {
-                        name: "True Peak",
-                        b: undefined,
-                        a: levelLabData!.processedMetrics.truePeak,
+                        name: "Brightness",
+                        b: rawMetrics?.spectralCentroid ?? 2600,
+                        a: levelLabData!.processedMetrics.spectralCentroid ?? rawMetrics?.spectralCentroid ?? 2600,
                         interp: levelLabData!.brightnessVerdict,
-                        metric: 'peak' as const
+                        metric: 'cent' as const
                       }
                     ].map((card, i) => {
                       const color = getDeltaColor(card.b ?? card.a, card.a, card.metric);
@@ -650,6 +913,18 @@ export default function LevelLabPage() {
                       const isWorse = color === 'rgba(220,50,50,1)';
                       const beforeWidth = '40%'; 
                       const afterWidth = isBetter ? '60%' : isWorse ? '20%' : '45%';
+                      const beforeValue =
+                        card.metric === "lufs"
+                          ? formatDb(card.b)
+                          : card.metric === "cent"
+                            ? `${formatVal(card.b, true)}k`
+                            : formatVal(card.b);
+                      const afterValue =
+                        card.metric === "lufs"
+                          ? formatDb(card.a)
+                          : card.metric === "cent"
+                            ? `${formatVal(card.a, true)}k`
+                            : formatVal(card.a);
 
                       return (
                         <div 
@@ -660,9 +935,9 @@ export default function LevelLabPage() {
                           <div className={styles.deltaCardTop}>
                             <div className={styles.deltaName}>{card.name}</div>
                             <div className={styles.deltaValues}>
-                              <span className={styles.deltaBefore}>{card.b === undefined ? "-" : formatVal(card.b)}</span>
+                              <span className={styles.deltaBefore}>{beforeValue}</span>
                               <span className={styles.deltaArrow} style={{ color }}>{isBetter ? '↑' : isWorse ? '↓' : '→'}</span>
-                              <span className={styles.deltaAfter} style={{ color }}>{card.metric === 'peak' ? formatDb(card.a) : formatVal(card.a)}</span>
+                              <span className={styles.deltaAfter} style={{ color }}>{afterValue}</span>
                             </div>
                           </div>
                           
@@ -686,8 +961,11 @@ export default function LevelLabPage() {
                       className={`${styles.summaryCard} ${cardsVisible ? styles.showCard : ''}`}
                       style={{ '--delay': '240ms' } as React.CSSProperties}
                     >
-                      <div className={styles.summaryTop}>NEXT STEP</div>
-                      <div className={styles.summaryContent}>{levelLabData.nextStep}</div>
+                      <div className={styles.summaryTop}>DELTA SUMMARY</div>
+                      <div className={styles.summaryContent}>{levelLabData.deltaSummary ?? levelLabData.nextStep}</div>
+                      <div className={styles.deltaInterpretation}>
+                        Delta: {levelLabData.delta.verdict}; LUFS {levelLabData.delta.lufs_delta > 0 ? "+" : ""}{levelLabData.delta.lufs_delta.toFixed(1)}, DR {levelLabData.delta.dynamic_range_delta > 0 ? "+" : ""}{levelLabData.delta.dynamic_range_delta.toFixed(1)}dB{levelLabData.delta.brightness_delta == null ? "" : `, brightness ${levelLabData.delta.brightness_delta > 0 ? "+" : ""}${levelLabData.delta.brightness_delta.toFixed(0)}Hz`}. {levelLabData.nextStep}
+                      </div>
                       <div className={styles.applyLink} onClick={() => router.push('/sandbox')}>
                         Apply in Sandbox →
                       </div>
@@ -697,9 +975,16 @@ export default function LevelLabPage() {
                 </div>
 
               </div>
-            </>
+            </div>
           )}
           </div>
+          <LevelLabTransport
+            rawUrl={rawAudioUrl}
+            processedUrl={processedAudioUrl}
+            hasProcessed={hasProcessed}
+            score={levelScore}
+            trackName={transportTrackName}
+          />
         </div>
       </GateScreen>
     </div>

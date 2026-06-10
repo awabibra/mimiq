@@ -8,6 +8,7 @@ import {
   useState,
   type DragEvent,
   type RefObject,
+  type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type {
@@ -36,7 +37,9 @@ interface VisualVocalChainProps {
   feedbackPanelOpen?: boolean;
   currentGenre?: string;
   currentDaw?: string;
-  validated?: boolean;
+  measuredFit?: EvaluationResult["measured_fit"];
+  assistantHighlight?: { step: number; nonce: number } | null;
+  audioPulse?: number;
   onEnterEditMode?: () => void;
   onEditedChainChange?: (chain: ChainStep[]) => void;
   onEvaluate?: () => void;
@@ -69,6 +72,13 @@ interface VisualNode {
   id: string;
   step: ChainStep;
   kind: NodeKind;
+}
+
+interface MainSection {
+  key: string;
+  label: string;
+  index: number;
+  nodes: VisualNode[];
 }
 
 interface WirePath {
@@ -138,6 +148,14 @@ const BUS_ORDER: BusKind[] = [
   "distortion_bus",
   "mastering_bus",
 ];
+
+const MAIN_SECTION_LABELS: Record<string, string> = {
+  cleanup: "Cleanup",
+  tone: "Tone Shaping",
+  dynamics: "Dynamics",
+  deessing: "De-essing",
+  inserts: "Insert FX",
+};
 
 const PLUGIN_PALETTE = {
   Filtering: ["highpass", "lowpass", "notch_filter"],
@@ -212,6 +230,47 @@ function classifyStep(step: ChainStep): NodeKind {
   if (text.includes("limiter") || text.includes("master")) return "mastering_bus";
 
   return "main";
+}
+
+function classifyMainSection(step: ChainStep) {
+  const text = `${step.role ?? ""} ${step.tool} ${step.action}`.toLowerCase();
+  if (
+    text.includes("gate") ||
+    text.includes("high-pass") ||
+    text.includes("highpass") ||
+    text.includes("noise")
+  ) {
+    return "cleanup";
+  }
+  if (text.includes("compress") || text.includes("level") || text.includes("vca") || text.includes("opto")) {
+    return "dynamics";
+  }
+  if (text.includes("deess") || text.includes("de-ess") || text.includes("sibilance")) {
+    return "deessing";
+  }
+  if (text.includes("eq") || text.includes("saturation") || text.includes("air") || text.includes("presence")) {
+    return "tone";
+  }
+  return "inserts";
+}
+
+function buildMainSections(nodes: VisualNode[]): MainSection[] {
+  const sections = new Map<string, VisualNode[]>();
+  const order = ["cleanup", "tone", "dynamics", "deessing", "inserts"];
+
+  nodes.forEach((node) => {
+    const key = classifyMainSection(node.step);
+    sections.set(key, [...(sections.get(key) ?? []), node]);
+  });
+
+  return order
+    .filter((key) => (sections.get(key)?.length ?? 0) > 0)
+    .map((key, index) => ({
+      key,
+      label: MAIN_SECTION_LABELS[key] ?? key,
+      index: index + 1,
+      nodes: sections.get(key) ?? [],
+    }));
 }
 
 function nodeId(step: ChainStep) {
@@ -951,7 +1010,9 @@ export function VisualVocalChain({
   feedbackPanelOpen = false,
   currentGenre,
   currentDaw,
-  validated = false,
+  measuredFit,
+  assistantHighlight = null,
+  audioPulse = 0,
   onEnterEditMode,
   onEditedChainChange,
   onEvaluate,
@@ -963,7 +1024,6 @@ export function VisualVocalChain({
   const editPanelRef = useRef<HTMLDivElement>(null);
   const [nodeRects, setNodeRects] = useState<Record<string, NodeRect>>({});
   const [paths, setPaths] = useState<WirePath[]>([]);
-  const [showBuses, setShowBuses] = useState(false);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [editNodeId, setEditNodeId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
@@ -975,7 +1035,7 @@ export function VisualVocalChain({
     severity: EvaluationSeverity;
   } | null>(null);
   const isEditMode = mode === "edit";
-  const busesExpanded = showBuses || isEditMode;
+  const busesExpanded = true;
   const activeEditNodeId = isEditMode ? editNodeId : null;
   const activeConfirmRemoveId = isEditMode ? confirmRemoveId : null;
   const activeAddTarget = isEditMode ? addTarget : null;
@@ -1025,6 +1085,8 @@ export function VisualVocalChain({
       ),
     };
   }, [nodes]);
+
+  const mainSections = useMemo(() => buildMainSections(mainNodes), [mainNodes]);
 
   useEffect(() => {
     if (!activeEditNodeId) return;
@@ -1162,19 +1224,28 @@ export function VisualVocalChain({
     setConfirmRemoveId(null);
   };
 
-  const reorderMain = (fromId: string, toId: string) => {
+  const toggleNode = (node: VisualNode) => {
+    updateNode(node.id, (step) => ({
+      ...step,
+      enabled: step.enabled === false,
+    }));
+  };
+
+  const reorderWithinLane = (fromId: string, toId: string) => {
     if (!chain || fromId === toId) return;
 
-    const main = chain.filter((step) => classifyStep(step) === "main");
-    const branches = chain.filter((step) => classifyStep(step) !== "main");
-    const fromIndex = main.findIndex((step) => nodeId(step) === fromId);
-    const toIndex = main.findIndex((step) => nodeId(step) === toId);
+    const fromStep = chain.find((step) => nodeId(step) === fromId);
+    const toStep = chain.find((step) => nodeId(step) === toId);
+    if (!fromStep || !toStep || classifyStep(fromStep) !== classifyStep(toStep)) return;
+
+    const nextChain = [...chain];
+    const fromIndex = nextChain.findIndex((step) => nodeId(step) === fromId);
+    const toIndex = nextChain.findIndex((step) => nodeId(step) === toId);
     if (fromIndex < 0 || toIndex < 0) return;
 
-    const nextMain = [...main];
-    const [moved] = nextMain.splice(fromIndex, 1);
-    nextMain.splice(toIndex, 0, moved);
-    updateChain([...nextMain, ...branches]);
+    const [moved] = nextChain.splice(fromIndex, 1);
+    nextChain.splice(toIndex, 0, moved);
+    updateChain(nextChain);
   };
 
   const insertPlugin = (target: AddTarget, pluginType: PalettePlugin) => {
@@ -1279,13 +1350,16 @@ export function VisualVocalChain({
   const orderedBuses = busRows.flat();
   const canEvaluate = isEditMode && isDirty && !evaluating;
   const canApply = isEditMode && hasUnsavedChanges && !evaluating;
+  const showFitBadge =
+    measuredFit === "good" || evaluationResult?.measured_fit === "good";
 
   return (
     <div
       className={`${styles.container} ${isEditMode ? styles.containerEdit : ""} ${
-        validated ? styles.containerValidated : ""
+        showFitBadge ? styles.containerFitGood : ""
       }`}
       ref={containerRef}
+      style={{ "--node-pulse": audioPulse } as CSSProperties}
     >
       <svg className={styles.svgLayer} width="100%" height="100%">
         {paths.map((path) => (
@@ -1306,15 +1380,15 @@ export function VisualVocalChain({
       </svg>
 
       <AnimatePresence>
-        {validated && (
+        {showFitBadge && (
           <motion.div
-            className={styles.validatedStamp}
+            className={styles.fitStamp}
             initial={{ opacity: 0, scale: 0.94 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.94 }}
             transition={{ duration: 0.2 }}
           >
-            ✓ Validated
+            Measured fit
           </motion.div>
         )}
       </AnimatePresence>
@@ -1328,45 +1402,56 @@ export function VisualVocalChain({
           {engineerNote && (
             <p className={styles.engineerNote}>{engineerNote}</p>
           )}
-          {mainNodes.map((node, index) => (
-            <div className={styles.mainNodeSlot} key={node.id}>
-              <ChainNode
-                node={node}
-                delay={index * 0.08}
-                active={activeNodeId === node.id}
-                editing={isEditMode}
-                editOpen={activeEditNodeId === node.id}
-                editPanelRef={activeEditNodeId === node.id ? editPanelRef : undefined}
-                confirmRemove={activeConfirmRemoveId === node.id}
-                draggableNode={isEditMode && node.kind === "main"}
-                highlightedClass={
-                  highlightedNode?.id === node.id
-                    ? severityClass(highlightedNode.severity)
-                    : undefined
-                }
-                onActiveChange={setActiveNodeId}
-                onOpenEdit={() => {
-                  if (!isEditMode) return;
-                  setEditNodeId(node.id);
-                  setConfirmRemoveId(null);
-                }}
-                onParamChange={(param, value) => handleParamChange(node, param, value)}
-                onRemove={() => removeNode(node)}
-                onRemoveIntent={() =>
-                  setConfirmRemoveId((current) => (current === node.id ? null : node.id))
-                }
-                onDragStart={() => setDraggedNodeId(node.id)}
-                onDragEnd={() => setDraggedNodeId(null)}
-                onDragOver={(event) => {
-                  if (!isEditMode || node.kind !== "main") return;
-                  event.preventDefault();
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  if (draggedNodeId) reorderMain(draggedNodeId, node.id);
-                  setDraggedNodeId(null);
-                }}
-              />
+          {mainSections.map((section) => (
+            <div className={styles.mainSectionGroup} key={section.key}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionIndex}>{section.index}</span>
+                <span>{section.label}</span>
+              </div>
+              {section.nodes.map((node) => (
+                <div className={styles.mainNodeSlot} key={node.id}>
+                  <ChainNode
+                    node={node}
+                    delay={(node.step.step - 1) * 0.04}
+                    active={activeNodeId === node.id}
+                    editing={isEditMode}
+                    editOpen={activeEditNodeId === node.id}
+                    editPanelRef={activeEditNodeId === node.id ? editPanelRef : undefined}
+                    confirmRemove={activeConfirmRemoveId === node.id}
+	                    draggableNode={isEditMode}
+                    highlightedClass={
+                      assistantHighlight?.step === node.step.step
+                        ? styles.nodeShellAiPulse
+                        : highlightedNode?.id === node.id
+                          ? severityClass(highlightedNode.severity)
+                          : undefined
+                    }
+                    onActiveChange={setActiveNodeId}
+                    onOpenEdit={() => {
+                      if (!isEditMode) return;
+                      setEditNodeId(node.id);
+                      setConfirmRemoveId(null);
+                    }}
+	                    onParamChange={(param, value) => handleParamChange(node, param, value)}
+	                    onToggleEnabled={() => toggleNode(node)}
+	                    onRemove={() => removeNode(node)}
+                    onRemoveIntent={() =>
+                      setConfirmRemoveId((current) => (current === node.id ? null : node.id))
+                    }
+                    onDragStart={() => setDraggedNodeId(node.id)}
+                    onDragEnd={() => setDraggedNodeId(null)}
+                    onDragOver={(event) => {
+                      if (!isEditMode || node.kind !== "main") return;
+                      event.preventDefault();
+                    }}
+	                    onDrop={(event) => {
+	                      event.preventDefault();
+	                      if (draggedNodeId) reorderWithinLane(draggedNodeId, node.id);
+	                      setDraggedNodeId(null);
+	                    }}
+                  />
+                </div>
+              ))}
             </div>
           ))}
           {isEditMode && (
@@ -1383,16 +1468,6 @@ export function VisualVocalChain({
 
         {visibleBuses.length > 0 && (
           <>
-            {!isEditMode && (
-              <button
-                className={styles.busToggle}
-                onClick={() => setShowBuses((visible) => !visible)}
-                type="button"
-              >
-                {showBuses ? "Hide buses" : "View buses ->"}
-              </button>
-            )}
-
             <AnimatePresence mode="wait">
               {feedbackPanelOpen && evaluationResult ? (
                 <motion.section
@@ -1428,11 +1503,14 @@ export function VisualVocalChain({
                             delay={index * 0.04}
                             active={activeNodeId === node.id}
                             editing={isEditMode}
-                            editOpen={activeEditNodeId === node.id}
-                            editPanelRef={activeEditNodeId === node.id ? editPanelRef : undefined}
-                            confirmRemove={activeConfirmRemoveId === node.id}
-                            highlightedClass={
-                              highlightedNode?.id === node.id
+	                            editOpen={activeEditNodeId === node.id}
+	                            editPanelRef={activeEditNodeId === node.id ? editPanelRef : undefined}
+	                            confirmRemove={activeConfirmRemoveId === node.id}
+	                            draggableNode={isEditMode}
+	                            highlightedClass={
+                              assistantHighlight?.step === node.step.step
+                                ? styles.nodeShellAiPulse
+                                : highlightedNode?.id === node.id
                                 ? severityClass(highlightedNode.severity)
                                 : undefined
                             }
@@ -1440,15 +1518,27 @@ export function VisualVocalChain({
                             onOpenEdit={() => {
                               setEditNodeId(node.id);
                               setConfirmRemoveId(null);
-                            }}
-                            onParamChange={(param, value) => handleParamChange(node, param, value)}
-                            onRemove={() => removeNode(node)}
+	                            }}
+	                            onParamChange={(param, value) => handleParamChange(node, param, value)}
+	                            onToggleEnabled={() => toggleNode(node)}
+	                            onRemove={() => removeNode(node)}
                             onRemoveIntent={() =>
                               setConfirmRemoveId((current) =>
-                                current === node.id ? null : node.id
-                              )
-                            }
-                          />
+	                                current === node.id ? null : node.id
+	                              )
+	                            }
+	                            onDragStart={() => setDraggedNodeId(node.id)}
+	                            onDragEnd={() => setDraggedNodeId(null)}
+	                            onDragOver={(event) => {
+	                              if (!isEditMode) return;
+	                              event.preventDefault();
+	                            }}
+	                            onDrop={(event) => {
+	                              event.preventDefault();
+	                              if (draggedNodeId) reorderWithinLane(draggedNodeId, node.id);
+	                              setDraggedNodeId(null);
+	                            }}
+	                          />
                         ))
                       ) : (
                         <span className={styles.emptyBusText}>No plugin on this bus.</span>
@@ -1512,6 +1602,9 @@ export function VisualVocalChain({
                             >
                               <div className={styles.branchHeader}>
                                 <span className={styles.branchLabel}>
+                                  <span className={styles.sectionIndex}>
+                                    {mainSections.length + groupIndex + 1}
+                                  </span>
                                   {BUS_LABELS[kind]}
                                 </span>
                                 <div className={styles.branchHeaderMeta}>
@@ -1546,13 +1639,16 @@ export function VisualVocalChain({
                                       delay={(groupIndex + index + mainNodes.length) * 0.08}
                                       active={activeNodeId === node.id}
                                       editing={isEditMode}
-                                      editOpen={activeEditNodeId === node.id}
-                                      editPanelRef={
-                                        activeEditNodeId === node.id ? editPanelRef : undefined
-                                      }
-                                      confirmRemove={activeConfirmRemoveId === node.id}
-                                      highlightedClass={
-                                        highlightedNode?.id === node.id
+	                                      editOpen={activeEditNodeId === node.id}
+	                                      editPanelRef={
+	                                        activeEditNodeId === node.id ? editPanelRef : undefined
+	                                      }
+	                                      confirmRemove={activeConfirmRemoveId === node.id}
+	                                      draggableNode={isEditMode}
+	                                      highlightedClass={
+                                        assistantHighlight?.step === node.step.step
+                                          ? styles.nodeShellAiPulse
+                                          : highlightedNode?.id === node.id
                                           ? severityClass(highlightedNode.severity)
                                           : undefined
                                       }
@@ -1562,16 +1658,28 @@ export function VisualVocalChain({
                                         setEditNodeId(node.id);
                                         setConfirmRemoveId(null);
                                       }}
-                                      onParamChange={(param, value) =>
-                                        handleParamChange(node, param, value)
-                                      }
-                                      onRemove={() => removeNode(node)}
+	                                      onParamChange={(param, value) =>
+	                                        handleParamChange(node, param, value)
+	                                      }
+	                                      onToggleEnabled={() => toggleNode(node)}
+	                                      onRemove={() => removeNode(node)}
                                       onRemoveIntent={() =>
                                         setConfirmRemoveId((current) =>
-                                          current === node.id ? null : node.id
-                                        )
-                                      }
-                                    />
+	                                          current === node.id ? null : node.id
+	                                        )
+	                                      }
+	                                      onDragStart={() => setDraggedNodeId(node.id)}
+	                                      onDragEnd={() => setDraggedNodeId(null)}
+	                                      onDragOver={(event) => {
+	                                        if (!isEditMode) return;
+	                                        event.preventDefault();
+	                                      }}
+	                                      onDrop={(event) => {
+	                                        event.preventDefault();
+	                                        if (draggedNodeId) reorderWithinLane(draggedNodeId, node.id);
+	                                        setDraggedNodeId(null);
+	                                      }}
+	                                    />
                                   ))
                                 ) : (
                                   <span className={styles.emptyBusText}>empty</span>
@@ -1685,9 +1793,10 @@ function ChainNode({
   highlightedClass,
   onActiveChange,
   onOpenEdit,
-  onParamChange,
-  onRemoveIntent,
-  onRemove,
+	  onParamChange,
+	  onToggleEnabled,
+	  onRemoveIntent,
+	  onRemove,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -1704,10 +1813,11 @@ function ChainNode({
   draggableNode?: boolean;
   highlightedClass?: string;
   onActiveChange?: (id: string | null) => void;
-  onOpenEdit?: () => void;
-  onParamChange?: (param: ParamControl, value: number | string | boolean) => void;
-  onRemoveIntent?: () => void;
-  onRemove?: () => void;
+	  onOpenEdit?: () => void;
+	  onParamChange?: (param: ParamControl, value: number | string | boolean) => void;
+	  onToggleEnabled?: () => void;
+	  onRemoveIntent?: () => void;
+	  onRemove?: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
   onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
@@ -1754,6 +1864,31 @@ function ChainNode({
             ⠿
           </button>
         )}
+	        {editing ? (
+	          <button
+	            type="button"
+	            className={`${styles.nodePower} ${
+	              !inactive ? styles.nodePowerActive : ""
+	            }`}
+	            aria-label={inactive ? "Enable plugin" : "Disable plugin"}
+	            aria-pressed={!inactive}
+	            onClick={(event) => {
+	              event.stopPropagation();
+	              onToggleEnabled?.();
+	            }}
+	          >
+	            <span />
+	          </button>
+	        ) : (
+	          <button
+	            type="button"
+	            className={styles.nodeMenu}
+	            aria-label="Plugin options"
+	            onClick={(event) => event.stopPropagation()}
+	          >
+	            ...
+	          </button>
+	        )}
         <span className={styles.stepNumber}>{node.step.step}</span>
         <span className={styles.nodeLabel}>{node.step.tool}</span>
         <span className={styles.nodeAction} title={node.step.action}>
@@ -2126,6 +2261,18 @@ function FeedbackPanel({
   onJump: (issue: EvaluationIssue) => void;
 }) {
   const [strengthsOpen, setStrengthsOpen] = useState(false);
+  const fitClass =
+    result.measured_fit === "good"
+      ? styles.verdict_good
+      : result.measured_fit === "needs_work"
+        ? styles.verdict_needs_work
+        : "";
+  const fitLabel =
+    result.measured_fit === "good"
+      ? "Measured fit good"
+      : result.measured_fit === "needs_work"
+        ? "Measured fit needs work"
+        : "Measured fit unknown";
 
   return (
     <div className={styles.feedbackPanel}>
@@ -2197,15 +2344,12 @@ function FeedbackPanel({
         </AnimatePresence>
       </section>
 
-      <section className={`${styles.verdict} ${styles[`verdict_${result.verdict}`]}`}>
-        <span>
-          {result.verdict === "professional"
-            ? "✓ Chain validated - ready to save"
-            : result.verdict === "good"
-              ? "Getting there"
-              : "Keep refining"}
-        </span>
-        <p>{result.verdict_reason}</p>
+      <section className={`${styles.verdict} ${fitClass}`}>
+        <span>{fitLabel}</span>
+        <p>{result.explanation}</p>
+        {result.flags.length > 0 && (
+          <p>Flags: {result.flags.join(", ")}</p>
+        )}
       </section>
 
       <button

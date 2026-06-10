@@ -234,8 +234,8 @@ export default function VaultPage() {
                       {era.name}
                     </span>
                     <div className={styles.cardTopMeta}>
-                      {chain.chain_data.validated && (
-                        <span className={styles.validatedBadge} title="Validated chain">
+                      {chain.chain_data.measured_fit === "good" && (
+                        <span className={styles.fitBadge} title="Measured fit">
                           ✓
                         </span>
                       )}

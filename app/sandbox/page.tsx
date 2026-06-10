@@ -3,12 +3,14 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useLayoutEffect,
   type ChangeEvent,
   type DragEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import type { User } from "@supabase/supabase-js";
 
@@ -43,6 +45,7 @@ import {
   isLocalProject,
   useProject,
 } from "@/lib/useProject";
+import { getGenreProfile } from "@/lib/chainKnowledge";
 import { supabase } from "@/lib/supabase";
 import type { GeneratedChain, ProjectPatch, VocalVersion } from "@/lib/types";
 import { VisualVocalChain } from "./VisualVocalChain";
@@ -55,6 +58,10 @@ import styles from "./page.module.css";
 type AppState = "empty" | "analyzing" | "results";
 type SandboxMode = "view" | "edit";
 type VocalChain = ChainStep[];
+type AnalysisProvenance = Pick<
+  AnalysisResponse,
+  "analysis_version" | "fallback_used" | "audio_service_status"
+>;
 
 type EditState = {
   mode: SandboxMode;
@@ -71,6 +78,42 @@ interface AudioInsights {
   brightness: string;
 }
 
+interface MetricReadout {
+  label: string;
+  value: string;
+  source: "measured" | "chain" | "unknown";
+}
+
+type AssistantSeverity = "critical" | "warning" | "note";
+
+interface AssistantIssue {
+  id: string;
+  severity: AssistantSeverity;
+  label: string;
+  detail: string;
+  claim: "measured" | "estimated" | "unknown";
+  targetRole?: string;
+}
+
+interface AssistantFix {
+  id: string;
+  label: string;
+  detail: string;
+  targetStep?: number;
+  targetRole?: string;
+}
+
+interface AssistantModel {
+  vibeSummary: string;
+  issues: AssistantIssue[];
+  fixes: AssistantFix[];
+}
+
+interface HighlightTarget {
+  step: number;
+  nonce: number;
+}
+
 const initialEditState: EditState = {
   mode: "view",
   editedChain: null,
@@ -82,6 +125,11 @@ const initialEditState: EditState = {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 const SAVE_AFTER_AUTH_KEY = "mimiq-save-chain-after-auth";
+const SAFE_ANALYSIS_PROVENANCE: AnalysisProvenance = {
+  analysis_version: "1.0",
+  fallback_used: true,
+  audio_service_status: "unknown",
+};
 
 /* ═══════════════════════════════════════════════════════════════
    Analysis steps labels (cosmetic — fill the wait)
@@ -147,6 +195,7 @@ async function callAnalyze(params: {
   xyX?: number;
   xyY?: number;
   cachedMetrics?: AudioMetrics;
+  cachedProvenance?: AnalysisProvenance | null;
   clientMetrics?: Partial<AudioMetrics>;
 }): Promise<AnalysisResponse> {
   const form = new FormData();
@@ -157,8 +206,15 @@ async function callAnalyze(params: {
   if (params.beatFile) form.append("beatFile", params.beatFile);
   if (params.xyX != null) form.append("xyX", String(params.xyX));
   if (params.xyY != null) form.append("xyY", String(params.xyY));
-  if (params.cachedMetrics)
-    form.append("cachedMetrics", JSON.stringify(params.cachedMetrics));
+  if (params.cachedMetrics) {
+    form.append(
+      "cachedMetrics",
+      JSON.stringify({
+        ...params.cachedMetrics,
+        ...(params.cachedProvenance ?? SAFE_ANALYSIS_PROVENANCE),
+      })
+    );
+  }
 
   const headers: HeadersInit = {};
   if (params.clientMetrics) {
@@ -261,6 +317,315 @@ const clamp = (value: number, min: number, max: number) =>
 
 const formatSignedDb = (value: number) =>
   `${value > 0 ? "+" : ""}${Number.isInteger(value) ? value : value.toFixed(1)}`;
+
+const toKhz = (hz: number) => (hz > 100 ? hz / 1000 : hz);
+
+const formatMetricDb = (value: number) =>
+  `${value > 0 ? "+" : ""}${Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(1)} dB`;
+
+function parsePresenceFromChain(chain: ChainStep[]) {
+  for (const step of chain) {
+    const role = step.role ?? "";
+    if (!/(additive|air|presence|eq)/i.test(`${role} ${step.tool}`)) continue;
+
+    const matches = Array.from(
+      step.action.matchAll(/([+\-−]?\d+(?:\.\d+)?)\s*dB\s+at\s+(\d+(?:\.\d+)?)\s*(kHz|Hz)/gi)
+    );
+    const presence = matches.find((match) => {
+      const rawFreq = Number(match[2]);
+      const hz = match[3]?.toLowerCase() === "khz" ? rawFreq * 1000 : rawFreq;
+      return hz >= 1800 && hz <= 5500;
+    });
+
+    if (presence?.[1]) {
+      const value = Number(presence[1].replace("−", "-"));
+      if (Number.isFinite(value)) return formatMetricDb(value);
+    }
+  }
+
+  return "--";
+}
+
+function formatPresenceBand(metrics: AudioMetrics | null, chain: ChainStep[]) {
+  if (metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)) {
+    const presenceDb = 10 * Math.log10(Math.max(metrics.harshness, 1e-12));
+    return `${presenceDb.toFixed(1)} dB`;
+  }
+
+  return parsePresenceFromChain(chain);
+}
+
+function buildMetricReadouts(
+  insights: AudioInsights | null,
+  metrics: AudioMetrics | null,
+  chain: ChainStep[]
+): MetricReadout[] {
+  return [
+    {
+      label: "Loudness",
+      value: insights?.loudness ?? (metrics ? `${metrics.lufs.toFixed(1)} LUFS` : "--"),
+      source: metrics ? "measured" : "unknown",
+    },
+    {
+      label: "Dynamic Range",
+      value:
+        insights?.dynamicRange ??
+        (metrics ? `${metrics.dynamicRange.toFixed(1)} dB` : "--"),
+      source: metrics ? "measured" : "unknown",
+    },
+    {
+      label: "Brightness",
+      value:
+        insights?.brightness ??
+        (metrics ? `${toKhz(metrics.spectralCentroid).toFixed(1)} kHz` : "--"),
+      source: metrics ? "measured" : "unknown",
+    },
+    {
+      label: "Presence",
+      value: formatPresenceBand(metrics, chain),
+      source:
+        metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)
+          ? "measured"
+          : chain.length > 0
+            ? "chain"
+            : "unknown",
+    },
+  ];
+}
+
+function findStepByRole(chain: ChainStep[], role: string) {
+  const roleText = role.toLowerCase();
+  return chain.find((step) => {
+    const haystack = `${step.role ?? ""} ${step.tool} ${step.action}`.toLowerCase();
+    if (roleText === "chain") return true;
+    if (roleText === "eq") return /eq|shelf|boost|cut/.test(haystack);
+    if (roleText === "deesser") return haystack.includes("deess") || haystack.includes("de-ess");
+    if (roleText === "highpass") return haystack.includes("highpass") || haystack.includes("high-pass");
+    if (roleText === "compressor") return haystack.includes("compressor") || haystack.includes("comp");
+    if (roleText === "compressor_primary") return haystack.includes("compressor") || haystack.includes("comp");
+    if (roleText === "mastering_limiter") return haystack.includes("limiter") || haystack.includes("ceiling");
+    if (roleText === "presence") return haystack.includes("eq") || haystack.includes("presence") || haystack.includes("air");
+    return haystack.includes(roleText);
+  });
+}
+
+function issueToFix(issue: AssistantIssue, chain: ChainStep[]): AssistantFix {
+  const target = issue.targetRole ? findStepByRole(chain, issue.targetRole) : undefined;
+  const fixLabels: Record<string, Pick<AssistantFix, "label" | "detail">> = {
+    sibilance: {
+      label: "De-ess around 7 kHz",
+      detail: "Reduces sharp consonants while keeping the top end visible.",
+    },
+    low_end: {
+      label: "High-pass filter",
+      detail: "Cleans low-end rumble before compression raises it.",
+    },
+    dynamics: {
+      label: "Compression leveling",
+      detail: "Smooths loudness swings without promising a finished mix.",
+    },
+    quiet: {
+      label: "Re-check gain staging",
+      detail: "Keeps the chain target aligned with the selected vibe.",
+    },
+    bright: {
+      label: "Soften presence EQ",
+      detail: "Pulls the vocal away from brittle upper-mid emphasis.",
+    },
+    dark: {
+      label: "Lift presence carefully",
+      detail: "Adds clarity without treating brightness as a guaranteed fix.",
+    },
+  };
+  const copy = fixLabels[issue.id] ?? {
+    label: "Review chain stage",
+    detail: "This points to the closest matching plugin in the current chain.",
+  };
+
+  return {
+    id: `fix-${issue.id}`,
+    ...copy,
+    targetRole: issue.targetRole,
+    targetStep: target?.step,
+  };
+}
+
+function evaluationIssueToAssistantIssue(
+  issue: EvaluationResult["issues"][number],
+  index: number,
+  claim: AssistantIssue["claim"]
+): AssistantIssue {
+  return {
+    id: `evaluation-${issue.plugin}-${index}`,
+    severity: issue.severity === "critical" ? "critical" : issue.severity === "warning" ? "warning" : "note",
+    label: issue.plugin === "chain" ? "Chain edit check" : issue.plugin.replace(/_/g, " "),
+    detail: issue.problem,
+    claim,
+    targetRole: issue.plugin,
+  };
+}
+
+function evaluationIssueToFix(
+  issue: EvaluationResult["issues"][number],
+  index: number,
+  chain: ChainStep[]
+): AssistantFix {
+  const target = findStepByRole(chain, issue.plugin);
+
+  return {
+    id: `fix-evaluation-${issue.plugin}-${index}`,
+    label: issue.fix,
+    detail: issue.why,
+    targetRole: issue.plugin,
+    targetStep: target?.step,
+  };
+}
+
+function buildAssistantModel(
+  metrics: AudioMetrics | null,
+  chain: ChainStep[],
+  eraId: string,
+  provenance: AnalysisProvenance | null,
+  evaluationResult?: EvaluationResult | null
+): AssistantModel {
+  const profile = getGenreProfile(eraId);
+  const issues: AssistantIssue[] = [];
+  const sourceIsFallback = provenance?.fallback_used || provenance?.audio_service_status !== "ok";
+  const claim = sourceIsFallback ? "estimated" : "measured";
+
+  if (evaluationResult) {
+    const evaluationIssues = evaluationResult.issues
+      .slice(0, 3)
+      .map((issue, index) => evaluationIssueToAssistantIssue(issue, index, claim));
+
+    return {
+      vibeSummary: evaluationResult.overall,
+      issues:
+        evaluationIssues.length > 0
+          ? evaluationIssues
+          : [
+              {
+                id: "evaluation-clear",
+                severity: "note",
+                label: "No major edit issue",
+                detail: evaluationResult.explanation,
+                claim,
+              },
+            ],
+      fixes:
+        evaluationResult.issues.length > 0
+          ? evaluationResult.issues
+              .slice(0, 3)
+              .map((issue, index) => evaluationIssueToFix(issue, index, chain))
+          : [
+              {
+                id: "fix-evaluation-keep",
+                label: "Keep evaluated chain",
+                detail: evaluationResult.explanation,
+              },
+            ],
+    };
+  }
+
+  if (!metrics) {
+    return {
+      vibeSummary: "Upload or select a vocal to show measured guidance.",
+      issues: [
+        {
+          id: "unknown",
+          severity: "note",
+          label: "No measured vocal yet",
+          detail: "MimiQ can show the chain, but issues stay unknown until audio is analyzed.",
+          claim: "unknown",
+        },
+      ],
+      fixes: [],
+    };
+  }
+
+  if ((metrics.sibilancePeak ?? -14) > -12) {
+    issues.push({
+      id: "sibilance",
+      severity: (metrics.sibilancePeak ?? -14) > -9 ? "critical" : "warning",
+      label: "Sharp S sounds",
+      detail: `Energy near the de-ess range is ${formatMetricDb(metrics.sibilancePeak ?? -12)}.`,
+      claim,
+      targetRole: "deesser",
+    });
+  }
+
+  if ((metrics.lowEndEnergy ?? 0) > 0.36 || (metrics.lowMidBuildup ?? 0) > 0.0002) {
+    issues.push({
+      id: "low_end",
+      severity: "warning",
+      label: "Low-end rumble",
+      detail: "The measured low band is high enough to check before compression.",
+      claim,
+      targetRole: "highpass",
+    });
+  }
+
+  if (
+    metrics.dynamicRange > profile.dynamic_range_target + 1 ||
+    (metrics.dynamicInconsistency ?? 0) > 0.36
+  ) {
+    issues.push({
+      id: "dynamics",
+      severity: "warning",
+      label: "Uneven vocal level",
+      detail: `${metrics.dynamicRange.toFixed(1)} dB range is above the ${profile.dynamic_range_target} dB target.`,
+      claim,
+      targetRole: "compressor",
+    });
+  }
+
+  if (metrics.lufs < profile.lufs_target - 2) {
+    issues.push({
+      id: "quiet",
+      severity: "note",
+      label: "Vocal sits quiet",
+      detail: `${metrics.lufs.toFixed(1)} LUFS is below the selected target context.`,
+      claim,
+      targetRole: "compressor",
+    });
+  }
+
+  if (metrics.spectralCentroid > 3000) {
+    issues.push({
+      id: "bright",
+      severity: "warning",
+      label: "Top end may feel edgy",
+      detail: `Brightness measured around ${toKhz(metrics.spectralCentroid).toFixed(1)} kHz.`,
+      claim,
+      targetRole: "presence",
+    });
+  } else if (metrics.spectralCentroid < 1800) {
+    issues.push({
+      id: "dark",
+      severity: "note",
+      label: "Vocal reads dark",
+      detail: `Brightness measured around ${toKhz(metrics.spectralCentroid).toFixed(1)} kHz.`,
+      claim,
+      targetRole: "presence",
+    });
+  }
+
+  const visibleIssues = issues.slice(0, 3);
+  return {
+    vibeSummary: `${profile.philosophy.split(".")[0]}.`,
+    issues: visibleIssues,
+    fixes:
+      visibleIssues.length > 0
+        ? visibleIssues.map((issue) => issueToFix(issue, chain)).slice(0, 3)
+        : [
+            {
+              id: "fix-keep-chain",
+              label: "Keep measured chain",
+              detail: "No major measured issue is flagged in this pass.",
+            },
+          ],
+  };
+}
 
 const replaceOrAppend = (
   action: string,
@@ -409,6 +774,30 @@ const newClientId = () => {
   return `${Date.now()}`;
 };
 
+function provenanceFromResult(result: AnalysisResponse): AnalysisProvenance {
+  return {
+    analysis_version: result.analysis_version,
+    fallback_used: result.fallback_used,
+    audio_service_status: result.audio_service_status,
+  };
+}
+
+function provenanceFromChainData(
+  chainData?: GeneratedChain["chain_data"]
+): AnalysisProvenance {
+  if (!chainData) return SAFE_ANALYSIS_PROVENANCE;
+
+  return {
+    analysis_version: chainData.analysis_version ?? "1.0",
+    fallback_used:
+      typeof chainData.fallback_used === "boolean"
+        ? chainData.fallback_used
+        : SAFE_ANALYSIS_PROVENANCE.fallback_used,
+    audio_service_status:
+      chainData.audio_service_status ?? SAFE_ANALYSIS_PROVENANCE.audio_service_status,
+  };
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Transition Overlay Component
    ═══════════════════════════════════════════════════════════════ */
@@ -455,6 +844,9 @@ export default function SandboxPage() {
   /* Zustand Store */
   const { daw, mic, plugins, era: storeEra, setEra } = useStore();
   const setSession = useAudioStore((state) => state.setSession);
+  const sessionVocalFileUrl = useAudioStore((state) => state.vocalFileUrl);
+  const sessionBeatFileUrl = useAudioStore((state) => state.beatFileUrl);
+  const sessionProcessedFileUrl = useAudioStore((state) => state.processedFileUrl);
   const user = useAuth((state) => state.user);
   const project = useProject((state) => state.project);
   const setActiveProject = useProject((state) => state.setActiveProject);
@@ -509,7 +901,12 @@ export default function SandboxPage() {
   const [editState, setEditState] = useState<EditState>(initialEditState);
   const [hasUnsavedEdit, setHasUnsavedEdit] = useState(false);
   const [evaluationIteration, setEvaluationIteration] = useState(0);
-  const [chainValidated, setChainValidated] = useState(false);
+  const [chainFitGood, setChainFitGood] = useState(false);
+  const [cachedAnalysisProvenance, setCachedAnalysisProvenance] =
+    useState<AnalysisProvenance | null>(null);
+  const [assistantHighlight, setAssistantHighlight] =
+    useState<HighlightTarget | null>(null);
+  const [audioPulse, setAudioPulse] = useState(0);
 
   /* Error states */
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -530,13 +927,14 @@ export default function SandboxPage() {
   const padRef = useRef<HTMLDivElement>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveChainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const assistantPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chainRef = useRef<ChainStep[]>([]);
   const cursorRef = useRef({ x: 0.55, y: 0.62 });
 
   /* ── Era switching updates CSS variable ── */
   useIsomorphicLayoutEffect(() => {
-    document.documentElement.style.setProperty("--accent", activeEra.accent);
-  }, [activeEra]);
+    document.documentElement.style.setProperty("--accent", "#C8F135");
+  }, [activeEra.id]);
 
   useEffect(() => {
     chainRef.current = chain;
@@ -550,6 +948,9 @@ export default function SandboxPage() {
     () => () => {
       if (liveChainTimerRef.current) {
         clearTimeout(liveChainTimerRef.current);
+      }
+      if (assistantPulseTimerRef.current) {
+        clearTimeout(assistantPulseTimerRef.current);
       }
     },
     []
@@ -586,21 +987,118 @@ export default function SandboxPage() {
       try {
         await saveUserPrefs(authedUser);
 
-        const remoteProject = isLocalProject(project)
-          ? await createProjectRecord(project.name, authedUser.id)
-          : project;
+	        const remoteProject = isLocalProject(project)
+	          ? await createProjectRecord(project.name, authedUser.id)
+	          : project;
+	        const now = new Date().toISOString();
+	        const activeSavedChain =
+	          project.generated_chains
+	            .filter(isGeneratedChain)
+	            .find((entry) => entry.id === activeGeneratedChainId) ??
+	          getLatestGeneratedChain(project);
+	        let generatedChains = project.generated_chains;
+	        let savedActiveChainId = activeGeneratedChainId;
 
-        let patch: ProjectPatch = {
-          beat_file_url: project.beat_file_url,
-          beat_filename: project.beat_filename,
-          vocal_versions: project.vocal_versions,
-          current_vocal_index: project.current_vocal_index,
-          generated_chains: project.generated_chains,
-          mix_room_report: project.mix_room_report,
-          level_lab_report: project.level_lab_report,
-          stem_split_url: project.stem_split_url,
-          last_opened_at: new Date().toISOString(),
-        };
+	        if (chain.length > 0) {
+	          const provenance =
+	            cachedAnalysisProvenance ?? provenanceFromChainData(activeSavedChain?.chain_data);
+	          const fit = editState.evaluationResult?.measured_fit ?? (chainFitGood ? "good" : undefined);
+	          const nextId = activeGeneratedChainId ?? newClientId();
+	          let replaced = false;
+
+	          generatedChains = project.generated_chains.map((entry) => {
+	            if (!isGeneratedChain(entry) || entry.id !== activeGeneratedChainId) {
+	              return entry;
+	            }
+
+	            replaced = true;
+	            return {
+	              ...entry,
+	              chain_data: {
+	                ...entry.chain_data,
+	                chain,
+	                summary:
+	                  entry.chain_data.summary ||
+	                  engineerNote ||
+	                  "Measured MimiQ vocal chain.",
+	                engineer_note: engineerNote ?? entry.chain_data.engineer_note,
+	                measurements: cachedMetrics ?? entry.chain_data.measurements,
+	                xyPosition: { x: cursorX, y: cursorY },
+	                analysis_version: provenance.analysis_version,
+	                fallback_used: provenance.fallback_used,
+	                audio_service_status: provenance.audio_service_status,
+	                ...(fit ? { measured_fit: fit } : {}),
+	                ...(editState.evaluationResult
+	                  ? {
+	                      validation_timestamp: now,
+	                      iteration_count: evaluationIteration,
+	                      evaluation_summary: editState.evaluationResult.overall,
+	                    }
+	                  : {}),
+	              },
+	              genre: activeEra.id,
+	              daw: daw || "Logic Pro",
+	              sandbox_settings: {
+	                ...entry.sandbox_settings,
+	                era: activeEra.id,
+	                mic,
+	                plugins,
+	                xyPosition: { x: cursorX, y: cursorY },
+	              },
+	            };
+	          });
+
+	          if (!replaced) {
+	            const generated: GeneratedChain = {
+	              id: nextId,
+	              chain_data: {
+	                chain,
+	                summary:
+	                  activeSavedChain?.chain_data.summary ||
+	                  engineerNote ||
+	                  "Measured MimiQ vocal chain.",
+	                engineer_note: engineerNote ?? activeSavedChain?.chain_data.engineer_note,
+	                measurements: cachedMetrics ?? activeSavedChain?.chain_data.measurements,
+	                xyPosition: { x: cursorX, y: cursorY },
+	                analysis_version: provenance.analysis_version,
+	                fallback_used: provenance.fallback_used,
+	                audio_service_status: provenance.audio_service_status,
+	                ...(fit ? { measured_fit: fit } : {}),
+	                ...(editState.evaluationResult
+	                  ? {
+	                      validation_timestamp: now,
+	                      iteration_count: evaluationIteration,
+	                      evaluation_summary: editState.evaluationResult.overall,
+	                    }
+	                  : {}),
+	              },
+	              genre: activeEra.id,
+	              daw: daw || "Logic Pro",
+	              created_at: now,
+	              sandbox_settings: {
+	                era: activeEra.id,
+	                mic,
+	                plugins,
+	                xyPosition: { x: cursorX, y: cursorY },
+	              },
+	            };
+
+	            generatedChains = [generated, ...project.generated_chains];
+	            savedActiveChainId = generated.id;
+	          }
+	        }
+
+	        let patch: ProjectPatch = {
+	          beat_file_url: project.beat_file_url,
+	          beat_filename: project.beat_filename,
+	          vocal_versions: project.vocal_versions,
+	          current_vocal_index: project.current_vocal_index,
+	          generated_chains: generatedChains,
+	          mix_room_report: project.mix_room_report,
+	          level_lab_report: project.level_lab_report,
+	          stem_split_url: project.stem_split_url,
+	          last_opened_at: now,
+	        };
 
         if (beatFile) {
           const beatPath = await uploadProjectAudio({
@@ -640,10 +1138,13 @@ export default function SandboxPage() {
           };
         }
 
-        const saved = await saveProjectPatch(remoteProject.id, patch);
-        setActiveProject(saved);
-        setShowSignUpPrompt(false);
-        showBanner("Chain saved.");
+	        const saved = await saveProjectPatch(remoteProject.id, patch);
+	        setActiveProject(saved);
+	        if (savedActiveChainId) {
+	          setActiveGeneratedChainId(savedActiveChainId);
+	        }
+	        setShowSignUpPrompt(false);
+	        showBanner("Chain saved.");
       } catch {
         showBanner("MimiQ could not save this chain yet. Try again.");
         throw new Error("Save failed");
@@ -652,10 +1153,24 @@ export default function SandboxPage() {
       }
     },
     [
-      beatFile,
-      project,
-      saveBusy,
-      saveUserPrefs,
+	      beatFile,
+	      activeEra.id,
+	      activeGeneratedChainId,
+	      cachedAnalysisProvenance,
+	      cachedMetrics,
+	      chain,
+	      chainFitGood,
+	      cursorX,
+	      cursorY,
+	      daw,
+	      editState.evaluationResult,
+	      engineerNote,
+	      evaluationIteration,
+	      mic,
+	      plugins,
+	      project,
+	      saveBusy,
+	      saveUserPrefs,
       setActiveProject,
       showBanner,
       vocalFile,
@@ -711,12 +1226,14 @@ export default function SandboxPage() {
       setUploadError(null);
 
       if (latestChain && chainData?.chain?.length && chainData.measurements) {
+        const provenance = provenanceFromChainData(chainData);
         setChain(chainData.chain);
         setEngineerNote(chainData.engineer_note ?? null);
         setInsights(formatInsights(chainData.measurements));
         setCachedMetrics(chainData.measurements);
+        setCachedAnalysisProvenance(provenance);
         setActiveGeneratedChainId(latestChain.id);
-        setChainValidated(Boolean(chainData.validated));
+        setChainFitGood(chainData.measured_fit === "good");
         setEditState(initialEditState);
         setHasUnsavedEdit(false);
         setEvaluationIteration(chainData.iteration_count ?? 0);
@@ -734,6 +1251,9 @@ export default function SandboxPage() {
             metrics: chainData.measurements,
             xyPosition,
             engineer_note: chainData.engineer_note,
+            analysis_version: provenance.analysis_version,
+            fallback_used: provenance.fallback_used,
+            audio_service_status: provenance.audio_service_status,
           },
         });
         return;
@@ -744,8 +1264,9 @@ export default function SandboxPage() {
         setEngineerNote(null);
         setInsights(null);
         setCachedMetrics(null);
+        setCachedAnalysisProvenance(null);
         setActiveGeneratedChainId(null);
-        setChainValidated(false);
+        setChainFitGood(false);
         setEditState(initialEditState);
         setHasUnsavedEdit(false);
         setEvaluationIteration(0);
@@ -764,8 +1285,9 @@ export default function SandboxPage() {
       setEngineerNote(null);
       setInsights(null);
       setCachedMetrics(null);
+      setCachedAnalysisProvenance(null);
       setActiveGeneratedChainId(null);
-      setChainValidated(false);
+      setChainFitGood(false);
       setEditState(initialEditState);
       setHasUnsavedEdit(false);
       setEvaluationIteration(0);
@@ -795,6 +1317,7 @@ export default function SandboxPage() {
 
     const chainData = selectedChain.chain_data;
     const xyPosition = chainData.xyPosition ?? { x: 0.55, y: 0.62 };
+    const provenance = provenanceFromChainData(chainData);
 
     const frame = requestAnimationFrame(() => {
       setChain(chainData.chain);
@@ -802,9 +1325,12 @@ export default function SandboxPage() {
       if (chainData.measurements) {
         setInsights(formatInsights(chainData.measurements));
         setCachedMetrics(chainData.measurements);
+        setCachedAnalysisProvenance(provenance);
+      } else {
+        setCachedAnalysisProvenance(null);
       }
       setActiveGeneratedChainId(selectedChain.id);
-      setChainValidated(Boolean(chainData.validated));
+      setChainFitGood(chainData.measured_fit === "good");
       setEditState(initialEditState);
       setHasUnsavedEdit(false);
       setEvaluationIteration(chainData.iteration_count ?? 0);
@@ -821,6 +1347,9 @@ export default function SandboxPage() {
               engineer_note: chainData.engineer_note,
               metrics: chainData.measurements,
               xyPosition,
+              analysis_version: provenance.analysis_version,
+              fallback_used: provenance.fallback_used,
+              audio_service_status: provenance.audio_service_status,
             }
           : null,
       });
@@ -843,6 +1372,9 @@ export default function SandboxPage() {
         engineer_note: result.engineer_note,
         measurements: result.metrics,
         xyPosition: result.xyPosition ?? { x: xyX, y: xyY },
+        analysis_version: result.analysis_version,
+        fallback_used: result.fallback_used,
+        audio_service_status: result.audio_service_status,
       },
       genre: eraId,
       daw: daw || "Logic Pro",
@@ -877,10 +1409,10 @@ export default function SandboxPage() {
     [project, setActiveProject, showBanner, updateProject, user]
   );
 
-  const persistGeneratedResult = useCallback(
-    async (
-      result: AnalysisResponse,
-      eraId: string,
+	  const persistGeneratedResult = useCallback(
+	    async (
+	      result: AnalysisResponse,
+	      eraId: string,
       xyX: number,
       xyY: number
     ) => {
@@ -888,21 +1420,84 @@ export default function SandboxPage() {
 
       const generated = buildGeneratedChain(result, eraId, xyX, xyY);
       setActiveGeneratedChainId(generated.id);
-      setChainValidated(false);
+      setChainFitGood(false);
+      setCachedAnalysisProvenance(provenanceFromResult(result));
       setEvaluationIteration(0);
       await persistProjectPatch({
         generated_chains: [generated, ...project.generated_chains],
       });
     },
-    [buildGeneratedChain, persistProjectPatch, project]
-  );
+	    [buildGeneratedChain, persistProjectPatch, project]
+	  );
 
-  const currentSavedValidation = useCallback(() => {
+	  const regenerateChain = useCallback(
+	    async (eraId: string, xyX: number, xyY: number) => {
+	      if (!cachedMetrics) return;
+
+	      if (liveChainTimerRef.current) {
+	        clearTimeout(liveChainTimerRef.current);
+	        liveChainTimerRef.current = null;
+	      }
+
+	      setChainLoading(true);
+	      try {
+	        const result = await callAnalyze({
+	          daw: daw || "Logic Pro",
+	          mic,
+	          plugins,
+	          eraId,
+	          xyX,
+	          xyY,
+	          cachedMetrics,
+	          cachedProvenance: cachedAnalysisProvenance,
+	        });
+
+	        const nextX = result.xyPosition?.x ?? xyX;
+	        const nextY = result.xyPosition?.y ?? xyY;
+
+	        setChain(result.chain);
+	        setEngineerNote(result.engineer_note ?? null);
+	        setInsights(formatInsights(result.metrics));
+	        setCachedMetrics(result.metrics);
+	        setCachedAnalysisProvenance(provenanceFromResult(result));
+	        setCursorX(nextX);
+	        setCursorY(nextY);
+	        cursorRef.current = { x: nextX, y: nextY };
+	        setHasPendingGenerate(false);
+	        setChainFitGood(false);
+	        setEditState(initialEditState);
+	        setHasUnsavedEdit(false);
+	        setEvaluationIteration(0);
+	        setSession({
+	          isAnalyzed: true,
+	          analysisResult: result,
+	          currentXyPosition: result.xyPosition,
+	        });
+	        void persistGeneratedResult(result, eraId, nextX, nextY);
+	      } catch {
+	        showBanner("Failed to regenerate chain. Try again.");
+	      } finally {
+	        setChainLoading(false);
+	      }
+	    },
+	    [
+	      cachedAnalysisProvenance,
+	      cachedMetrics,
+	      daw,
+	      mic,
+	      persistGeneratedResult,
+	      plugins,
+	      setSession,
+	      showBanner,
+	    ]
+	  );
+
+	  const currentSavedFitGood = useCallback(() => {
     const saved = project?.generated_chains
       .filter(isGeneratedChain)
       .find((entry) => entry.id === activeGeneratedChainId);
 
-    return Boolean(saved?.chain_data.validated);
+    return saved?.chain_data.measured_fit === "good";
   }, [activeGeneratedChainId, project]);
 
   const handleEnterEditMode = useCallback(() => {
@@ -930,7 +1525,7 @@ export default function SandboxPage() {
       };
     });
     setHasUnsavedEdit(true);
-    setChainValidated(false);
+    setChainFitGood(false);
   }, []);
 
   const closeEditMode = useCallback(() => {
@@ -939,9 +1534,9 @@ export default function SandboxPage() {
   }, []);
 
   const handleDiscardEdit = useCallback(() => {
-    setChainValidated(currentSavedValidation());
+    setChainFitGood(currentSavedFitGood());
     closeEditMode();
-  }, [closeEditMode, currentSavedValidation]);
+  }, [closeEditMode, currentSavedFitGood]);
 
   const handleSaveEditedChain = useCallback(async () => {
     const editedChain = editState.editedChain;
@@ -951,14 +1546,15 @@ export default function SandboxPage() {
     }
 
     const result = editState.evaluationResult;
-    const validated = result?.verdict === "professional";
+    const measuredFit = result?.measured_fit ?? "unknown";
+    const fitGood = measuredFit === "good";
     const evaluationSummary =
-      result?.overall ?? "Saved without a professional validation pass.";
-    const iterationCount = Math.max(evaluationIteration, validated || result ? 1 : 0);
+      result?.overall ?? "Saved without a measured fit audit.";
+    const iterationCount = Math.max(evaluationIteration, fitGood || result ? 1 : 0);
     const validationTimestamp = new Date().toISOString();
 
     setChain(editedChain);
-    setChainValidated(validated);
+    setChainFitGood(fitGood);
 
     if (project && activeGeneratedChainId) {
       let replaced = false;
@@ -973,7 +1569,7 @@ export default function SandboxPage() {
           chain_data: {
             ...entry.chain_data,
             chain: editedChain,
-            validated,
+            measured_fit: measuredFit,
             validation_timestamp: validationTimestamp,
             iteration_count: iterationCount,
             evaluation_summary: evaluationSummary,
@@ -987,7 +1583,7 @@ export default function SandboxPage() {
     }
 
     closeEditMode();
-    showBanner(validated ? "Chain validated and saved." : "Chain changes saved.");
+    showBanner(fitGood ? "Measured fit saved." : "Chain changes saved.");
   }, [
     activeGeneratedChainId,
     closeEditMode,
@@ -1027,7 +1623,7 @@ export default function SandboxPage() {
       });
 
       setEvaluationIteration(nextIteration);
-      setChainValidated(result.verdict === "professional");
+      setChainFitGood(result.measured_fit === "good");
       setEditState((state) => ({
         ...state,
         isDirty: false,
@@ -1037,7 +1633,7 @@ export default function SandboxPage() {
       }));
     } catch {
       setEvaluationIteration(nextIteration);
-      setChainValidated(false);
+      setChainFitGood(false);
       setEditState((state) => ({
         ...state,
         isDirty: false,
@@ -1054,8 +1650,9 @@ export default function SandboxPage() {
             },
           ],
           strengths: [],
-          verdict: "needs_work",
-          verdict_reason: "The chain was not validated by the evaluation engine.",
+          measured_fit: "unknown",
+          flags: ["evaluation_request_failed"],
+          explanation: "The chain audit did not complete, so MimiQ cannot label the edit as measured improvement.",
         },
         feedbackPanelOpen: true,
       }));
@@ -1094,46 +1691,23 @@ export default function SandboxPage() {
   }, [editState.mode, handleDiscardEdit]);
 
   /* ── Handle era change ── */
-  const handleEraChange = useCallback(
-    async (era: Era) => {
-      setActiveEra(era);
-      setEra(era.id); // Persist user's manual era choice
-      if (appState === "results" && cachedMetrics) {
-        setChainLoading(true);
-        try {
-          const result = await callAnalyze({
-            daw: daw || "Logic Pro",
-            mic,
-            plugins,
-            eraId: era.id,
-            xyX: cursorX,
-            xyY: cursorY,
-            cachedMetrics,
-          });
-          setChain(result.chain);
-          setEngineerNote(result.engineer_note ?? null);
-          setHasPendingGenerate(false);
-          void persistGeneratedResult(result, era.id, cursorX, cursorY);
-        } catch {
-          showBanner("Failed to regenerate chain. Try again.");
-        } finally {
-          setChainLoading(false);
-        }
-      }
-    },
-    [
-      appState,
-      cachedMetrics,
-      cursorX,
-      cursorY,
-      showBanner,
-      daw,
-      mic,
-      plugins,
-      persistGeneratedResult,
-      setEra,
-    ]
-  );
+	  const handleEraChange = useCallback(
+	    async (era: Era) => {
+	      setActiveEra(era);
+	      setEra(era.id); // Persist user's manual era choice
+	      if (appState === "results" && cachedMetrics && editState.mode !== "edit") {
+	        const { x, y } = cursorRef.current;
+	        await regenerateChain(era.id, x, y);
+	      }
+	    },
+	    [
+	      appState,
+	      cachedMetrics,
+	      editState.mode,
+	      regenerateChain,
+	      setEra,
+	    ]
+	  );
 
   /* ── File handling ── */
   const handleVocalSelect = useCallback(
@@ -1185,6 +1759,7 @@ export default function SandboxPage() {
         setEngineerNote(result.engineer_note ?? null);
         setInsights(formatInsights(result.metrics));
         setCachedMetrics(result.metrics);
+        setCachedAnalysisProvenance(provenanceFromResult(result));
         setCursorX(result.xyPosition.x);
         setCursorY(result.xyPosition.y);
         setHasPendingGenerate(false);
@@ -1197,15 +1772,18 @@ export default function SandboxPage() {
 
         if (project) {
           try {
-            const generated = buildGeneratedChain(
-              result,
-              activeEra.id,
-              result.xyPosition.x,
-              result.xyPosition.y
-            );
-            const patch: ProjectPatch = {
-              generated_chains: [generated, ...project.generated_chains],
-            };
+	            const generated = buildGeneratedChain(
+	              result,
+	              activeEra.id,
+	              result.xyPosition.x,
+	              result.xyPosition.y
+	            );
+	            setActiveGeneratedChainId(generated.id);
+	            setChainFitGood(false);
+	            setEvaluationIteration(0);
+	            const patch: ProjectPatch = {
+	              generated_chains: [generated, ...project.generated_chains],
+	            };
 
             if (user && !isLocalProject(project)) {
               storedVocalUrl = await uploadProjectAudio({
@@ -1368,6 +1946,7 @@ export default function SandboxPage() {
           xyX: 0.55,
           xyY: 0.62,
           cachedMetrics: exploreMetrics,
+          cachedProvenance: SAFE_ANALYSIS_PROVENANCE,
         }),
         minDelay,
       ]);
@@ -1376,6 +1955,7 @@ export default function SandboxPage() {
       setEngineerNote(result.engineer_note ?? null);
       setInsights(formatInsights(result.metrics));
       setCachedMetrics(result.metrics);
+      setCachedAnalysisProvenance(provenanceFromResult(result));
       setCursorX(result.xyPosition.x);
       setCursorY(result.xyPosition.y);
       setHasPendingGenerate(false);
@@ -1409,11 +1989,12 @@ export default function SandboxPage() {
     setEngineerNote(null);
     setInsights(null);
     setCachedMetrics(null);
+    setCachedAnalysisProvenance(null);
     setActiveGeneratedChainId(null);
     setEditState(initialEditState);
     setHasUnsavedEdit(false);
     setEvaluationIteration(0);
-    setChainValidated(false);
+    setChainFitGood(false);
     setErrorBanner(null);
     setUploadError(null);
     setHasPendingGenerate(false);
@@ -1423,40 +2004,64 @@ export default function SandboxPage() {
   /* ── XY pad drag ── */
   const isDragging = useRef(false);
 
-  /* ── Generate Chain ── */
-  const handleGenerate = useCallback(async () => {
-    if (!cachedMetrics) return;
-    setChainLoading(true);
-    try {
-      const result = await callAnalyze({
-        daw: daw || "Logic Pro",
-        mic,
-        plugins,
-        eraId: activeEra.id,
-        xyX: cursorX,
-        xyY: cursorY,
-        cachedMetrics,
-      });
-      setChain(result.chain);
-      setEngineerNote(result.engineer_note ?? null);
-      setHasPendingGenerate(false);
-      void persistGeneratedResult(result, activeEra.id, cursorX, cursorY);
-    } catch {
-      showBanner("Failed to generate chain. Try again.");
-    } finally {
-      setChainLoading(false);
+	  /* ── Generate Chain ── */
+	  const handleGenerate = useCallback(async () => {
+	    await regenerateChain(activeEra.id, cursorRef.current.x, cursorRef.current.y);
+	  }, [activeEra.id, regenerateChain]);
+
+  const handleResetChain = useCallback(() => {
+    const savedChain =
+      project?.generated_chains
+        .filter(isGeneratedChain)
+        .find((entry) => entry.id === activeGeneratedChainId) ??
+      getLatestGeneratedChain(project);
+
+    if (!savedChain) {
+      handleDiscardEdit();
+      return;
     }
-  }, [
-    cachedMetrics,
-    activeEra.id,
-    daw,
-    mic,
-    plugins,
-    cursorX,
-    cursorY,
-    showBanner,
-    persistGeneratedResult,
-  ]);
+
+    const chainData = savedChain.chain_data;
+    const xyPosition = chainData.xyPosition ?? { x: 0.55, y: 0.62 };
+    const provenance = provenanceFromChainData(chainData);
+
+    setChain(chainData.chain);
+    setEngineerNote(chainData.engineer_note ?? null);
+    if (chainData.measurements) {
+      setInsights(formatInsights(chainData.measurements));
+      setCachedMetrics(chainData.measurements);
+    }
+    setCachedAnalysisProvenance(provenance);
+    setActiveGeneratedChainId(savedChain.id);
+    setChainFitGood(chainData.measured_fit === "good");
+    setEditState(initialEditState);
+    setHasUnsavedEdit(false);
+    setEvaluationIteration(chainData.iteration_count ?? 0);
+    setCursorX(xyPosition.x);
+    setCursorY(xyPosition.y);
+    setHasPendingGenerate(false);
+    showBanner("Chain reset to the saved project state.");
+  }, [activeGeneratedChainId, handleDiscardEdit, project, showBanner]);
+
+  const handleAssistantFix = useCallback((fix: AssistantFix) => {
+    if (!fix.targetStep) return;
+
+    if (assistantPulseTimerRef.current) {
+      clearTimeout(assistantPulseTimerRef.current);
+    }
+
+    setAssistantHighlight(null);
+    requestAnimationFrame(() => {
+      setAssistantHighlight((current) => ({
+        step: fix.targetStep!,
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+    });
+
+    assistantPulseTimerRef.current = setTimeout(() => {
+      setAssistantHighlight(null);
+    }, 900);
+  }, []);
 
   const applyLiveXYChain = useCallback((x: number, y: number) => {
     const currentChain = chainRef.current;
@@ -1528,17 +2133,23 @@ export default function SandboxPage() {
     (e: ReactPointerEvent<HTMLDivElement>) => {
       isDragging.current = true;
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      updateCursorFromPointer(e.clientX, e.clientY);
+      const position = updateCursorFromPointer(e.clientX, e.clientY);
+      if (position) {
+        scheduleLiveXYChain(position.x, position.y);
+      }
     },
-    [updateCursorFromPointer]
+    [scheduleLiveXYChain, updateCursorFromPointer]
   );
 
   const handlePadPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!isDragging.current) return;
-      updateCursorFromPointer(e.clientX, e.clientY);
+      const position = updateCursorFromPointer(e.clientX, e.clientY);
+      if (position) {
+        scheduleLiveXYChain(position.x, position.y);
+      }
     },
-    [updateCursorFromPointer]
+    [scheduleLiveXYChain, updateCursorFromPointer]
   );
 
   const handlePadPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1546,21 +2157,57 @@ export default function SandboxPage() {
     const position = updateCursorFromPointer(e.clientX, e.clientY);
     if (position) {
       scheduleLiveXYChain(position.x, position.y);
+      if (cachedMetrics && appState === "results" && editState.mode !== "edit") {
+        void regenerateChain(activeEra.id, position.x, position.y);
+      }
     }
-  }, [scheduleLiveXYChain, updateCursorFromPointer]);
+  }, [
+    activeEra.id,
+    appState,
+    cachedMetrics,
+    editState.mode,
+    regenerateChain,
+    scheduleLiveXYChain,
+    updateCursorFromPointer,
+  ]);
 
   /* ═══════════════════════════════════════════════════════════
      Render
      ═══════════════════════════════════════════════════════════ */
 
-  if (!mounted) return null;
-
   const isEditing = editState.mode === "edit";
   const displayedChain =
     isEditing && editState.editedChain ? editState.editedChain : chain;
-  const showValidatedStamp =
+  const showMeasuredFitBadge =
     !editState.isDirty &&
-    (chainValidated || editState.evaluationResult?.verdict === "professional");
+    (chainFitGood || editState.evaluationResult?.measured_fit === "good");
+  const currentVocal = project ? getCurrentVocal(project) : null;
+  const rawAudioUrl = sessionVocalFileUrl ?? currentVocal?.url ?? null;
+  const processedAudioUrl = sessionProcessedFileUrl ?? project?.stem_split_url ?? null;
+  const metricReadouts = useMemo(
+    () => buildMetricReadouts(insights, cachedMetrics, displayedChain),
+    [cachedMetrics, displayedChain, insights]
+  );
+  const assistantModel = useMemo(
+    () =>
+	      buildAssistantModel(
+	        cachedMetrics,
+	        displayedChain,
+	        activeEra.id,
+	        cachedAnalysisProvenance,
+	        editState.isDirty ? null : editState.evaluationResult
+	      ),
+	    [
+	      activeEra.id,
+	      cachedAnalysisProvenance,
+	      cachedMetrics,
+	      displayedChain,
+	      editState.evaluationResult,
+	      editState.isDirty,
+	    ]
+	  );
+
+  if (!mounted) return null;
 
   return (
     <ProjectGate>
@@ -1595,285 +2242,153 @@ export default function SandboxPage() {
         onEraChange={handleEraChange}
         savedCount={0}
         dimNavItems={isEditing}
+        uploadedVocalName={vocalFile?.name ?? null}
+        onVocalUpload={handleVocalSelect}
+        onVocalClear={handleRemoveVocal}
       />
 
-      <div
-        className={`${styles.sandboxContent} ${
-          appState === "results" ? styles.sandboxContentResults : ""
-        }`}
-      >
-        {/* ─────────────────────────────────────────────────
-            CENTER PANEL
-            ───────────────────────────────────────────────── */}
+      <div className={styles.studioContent}>
+	        <WorkspaceMetricsBar
+	          readouts={metricReadouts}
+	          busyLabel={
+	            appState === "analyzing"
+	              ? "Analyzing"
+	              : chainLoading
+	                ? "Generating"
+	                : null
+	          }
+	          canAnalyze={Boolean(cachedMetrics) && !chainLoading && !isEditing}
+	          onAnalyze={handleGenerate}
+	        />
 
-
-      {/* ─────────────────────────────────────────────────
-          CENTER PANEL
-          ───────────────────────────────────────────────── */}
-      <main
-        className={`${styles.center} ${
-          appState === "results" ? styles.centerToolDock : ""
-        } ${isEditing ? styles.editDimmed : ""}`}
-      >
-        {/* File chip — shows uploaded file name */}
-        {vocalFile && appState !== "empty" && (
-          <div className={styles.fileChip}>
-            <span className={styles.fileChipName}>{vocalFile.name}</span>
-            <button
-              className={styles.fileChipRemove}
-              onClick={handleRemoveVocal}
-              aria-label="Remove vocal"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
-        {/* ── Empty state ── */}
-        {appState === "empty" && (
-          <>
-            <div
-              className={`${styles.uploadZone} ${
-                dragOver ? styles.uploadZoneDragover : ""
-              }`}
-              onClick={() => vocalInputRef.current?.click()}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              role="button"
-              tabIndex={0}
-              aria-label="Upload vocal file"
-            >
-              <AnimatedDashedBorder />
-              <UploadArrowIcon className={styles.uploadIcon} />
-              <span className={styles.uploadPrimary}>
-                Drop your vocal here
-              </span>
-              <span className={styles.uploadSecondary}>
-                .wav or .mp3 · up to 60 seconds
-              </span>
-              {uploadError && (
-                <span className={styles.uploadErrorInline}>{uploadError}</span>
+        <main className={`${styles.chainWorkspace} ${isEditing ? styles.editDimmed : ""}`}>
+          <header className={styles.workspaceHeader}>
+            <div>
+              <span className={styles.chainTitle}>Vocal Chain</span>
+              <h1>Chain</h1>
+            </div>
+            <div className={styles.workspaceActions}>
+              {isEditing && <span className={styles.editingBadge}>Editing</span>}
+              <span className={styles.optimizeLabel}>Optimize for</span>
+              <span className={styles.optimizePill}>{activeEra.name}</span>
+              {chain.length > 0 && !isEditing && (
+                <button
+                  type="button"
+                  className={styles.saveChainButton}
+                  onClick={handleSaveChain}
+	                  disabled={saveBusy}
+	                >
+	                  {saveBusy ? "Saving chain" : "Save chain"}
+	                </button>
               )}
             </div>
-            <input
-              ref={vocalInputRef}
-              type="file"
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              className={styles.hiddenInput}
-              onChange={handleVocalInput}
-            />
+          </header>
 
-            <div
-              className={styles.beatUpload}
-              onClick={() => beatInputRef.current?.click()}
-              role="button"
-              tabIndex={0}
-              aria-label="Upload beat file (optional)"
-            >
-              <AnimatedDashedBorder />
-              <UploadArrowIcon className={styles.uploadIcon} />
-              <span className={styles.beatUploadText}>
-                {beatFile
-                  ? `Beat: ${beatFile.name}`
-                  : project?.beat_filename
-                    ? `Beat: ${project.beat_filename}`
-                  : "Add your beat too (optional)"}
-              </span>
-            </div>
-            <input
-              ref={beatInputRef}
-              type="file"
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              className={styles.hiddenInput}
-              onChange={handleBeatInput}
-            />
-
-            <button className={styles.skipLink} onClick={handleSkip}>
-              Skip upload — explore without audio
-            </button>
-          </>
-        )}
-
-        {/* ── Analyzing state ── */}
-        {appState === "analyzing" && (
-          <div className={styles.analysisCard}>
-            {ANALYSIS_STEPS.map((step, i) => (
-              <div key={i} className={styles.analysisRow}>
-                <span className={styles.analysisText}>{step}</span>
-                <CheckIcon className={styles.analysisCheck} />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* ── Results state ── */}
-        {appState === "results" && (
-          <>
-            {/* XY Pad and Sliders Container */}
-            <div className={styles.xyContainer}>
-              {/* Top horizontal slider */}
-              <div className={styles.sliderTopWrapper}>
-                <input
-                  type="range"
-                  min="0" max="1" step="0.01"
-                  value={cursorX}
-                  onChange={handleSliderX}
-                  className={styles.sleekSlider}
-                />
-              </div>
-
-              <div className={styles.xyMiddleRow}>
-                {/* Left vertical slider */}
-                <div className={styles.sliderLeftWrapper}>
-                  <input
-                    type="range"
-                    min="0" max="1" step="0.01"
-                    value={cursorY}
-                    onChange={handleSliderY}
-                    className={`${styles.sleekSlider} ${styles.sliderVertical}`}
-                  />
-                </div>
-
-                {/* XY Pad */}
-                <div
-                  ref={padRef}
-                  className={styles.xyPad}
-                  onPointerDown={handlePadPointerDown}
-                  onPointerMove={handlePadPointerMove}
-                  onPointerUp={handlePadPointerUp}
-                  onPointerCancel={handlePadPointerUp}
+          <section
+            className={styles.chainCanvas}
+            onDragOver={appState === "empty" ? handleDragOver : undefined}
+            onDragLeave={appState === "empty" ? handleDragLeave : undefined}
+            onDrop={appState === "empty" ? handleDrop : undefined}
+          >
+            {vocalFile && appState !== "empty" && (
+              <div className={styles.fileChip}>
+                <span className={styles.fileChipName}>{vocalFile.name}</span>
+                <button
+                  className={styles.fileChipRemove}
+                  onClick={handleRemoveVocal}
+                  aria-label="Remove vocal"
                 >
-              <span className={`${styles.xyAxisLabel} ${styles.xyAxisTop}`}>
-                Bright
-              </span>
-              <span className={`${styles.xyAxisLabel} ${styles.xyAxisBottom}`}>
-                Dark
-              </span>
-              <span className={`${styles.xyAxisLabel} ${styles.xyAxisLeft}`}>
-                Dry
-              </span>
-              <span className={`${styles.xyAxisLabel} ${styles.xyAxisRight}`}>
-                Wet
-              </span>
-
-              <AnimatedGrid cursorX={cursorX} cursorY={cursorY} />
-
-              <div
-                className={styles.xyCursor}
-                style={{
-                  left: `${cursorX * 100}%`,
-                  top: `${(1 - cursorY) * 100}%`,
-                }}
-              />
-            </div>
-            </div>
-            </div>
-
-            {/* Generate Button */}
-            {!isEditing && (
-              <div className={`${styles.generateWrapper} ${styles.generateWrapperVisible}`}>
-                {hasPendingGenerate || chainLoading ? (
-                  <button
-                    className={`${styles.generateButton} ${chainLoading ? styles.generateButtonLoading : ''}`}
-                    onClick={handleGenerate}
-                    disabled={chainLoading}
-                  >
-                    {chainLoading ? (
-                      <>
-                        <div className={styles.analysisSpinner} style={{ width: '12px', height: '12px' }} />
-                        Generating...
-                      </>
-                    ) : (
-                      "Generate Chain"
-                    )}
-                  </button>
-                ) : (
-                  <span className={styles.generateHint}>Adjust grid to generate</span>
-                )}
+                  x
+                </button>
               </div>
             )}
-          </>
-        )}
-        </main>
 
-      {/* ─────────────────────────────────────────────────
-          RIGHT PANEL
-          ───────────────────────────────────────────────── */}
-      <aside className={styles.right}>
-        {appState === "results" && (
-          <div className={`${styles.insightStrip} ${isEditing ? styles.editDimmed : ""}`}>
-            <div className={styles.insightCard}>
-              <span className={styles.insightLabel}>Loudness</span>
-              <span className={styles.insightValue}>
-                {insights?.loudness ?? "-"}
-              </span>
-            </div>
-            <div className={styles.insightCard}>
-              <span className={styles.insightLabel}>Dynamic Range</span>
-              <span className={styles.insightValue}>
-                {insights?.dynamicRange ?? "-"}
-              </span>
-            </div>
-            <div className={styles.insightCard}>
-              <span className={styles.insightLabel}>Brightness</span>
-              <span className={styles.insightValue}>
-                {insights?.brightness ?? "-"}
-              </span>
-            </div>
-          </div>
-        )}
+            {appState === "empty" && (
+              <div className={styles.studioDropState}>
+                <div
+                  className={`${styles.uploadZone} ${
+                    dragOver ? styles.uploadZoneDragover : ""
+                  }`}
+                  onClick={() => vocalInputRef.current?.click()}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload vocal file"
+                >
+                  <AnimatedDashedBorder />
+                  <UploadArrowIcon className={styles.uploadIcon} />
+                  <span className={styles.uploadPrimary}>Drop your vocal here</span>
+                  <span className={styles.uploadSecondary}>
+                    .wav or .mp3 · up to 60 seconds
+                  </span>
+                  {uploadError && (
+                    <span className={styles.uploadErrorInline}>{uploadError}</span>
+                  )}
+                </div>
+                <input
+                  ref={vocalInputRef}
+                  type="file"
+                  accept=".wav,.mp3,audio/wav,audio/mpeg"
+                  className={styles.hiddenInput}
+                  onChange={handleVocalInput}
+                />
 
-        {/* ── Empty / exploring state ── */}
-        {(appState === "empty" || appState === "analyzing") && (
-          <div className={styles.rightEmpty}>
-            <span className={styles.rightEmptyTitle}>
-              Your chain will appear here
-            </span>
-            <span className={styles.rightEmptyDesc}>
-              Upload a vocal to get a personalized chain, or explore the XY pad
-              for general guidance.
-            </span>
-          </div>
-        )}
+                <div
+                  className={styles.beatUpload}
+                  onClick={() => beatInputRef.current?.click()}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload beat file (optional)"
+                >
+                  <AnimatedDashedBorder />
+                  <UploadArrowIcon className={styles.uploadIcon} />
+                  <span className={styles.beatUploadText}>
+                    {beatFile
+                      ? `Beat: ${beatFile.name}`
+                      : project?.beat_filename
+                        ? `Beat: ${project.beat_filename}`
+                        : "Add your beat too (optional)"}
+                  </span>
+                </div>
+                <input
+                  ref={beatInputRef}
+                  type="file"
+                  accept=".wav,.mp3,audio/wav,audio/mpeg"
+                  className={styles.hiddenInput}
+                  onChange={handleBeatInput}
+                />
 
-        {/* ── Skeleton loading ── */}
-        {appState === "results" && chainLoading && (
-          <>
-            <div className={styles.chainHeader}>
-              <span className={styles.chainTitle}>Vocal Chain</span>
-            </div>
-            <div className={styles.skeleton}>
-              <div className={styles.skeletonLine} />
-              <div className={styles.skeletonLine} />
-              <div className={styles.skeletonLine} />
-            </div>
-          </>
-        )}
-
-        {/* ── Results chain ── */}
-        {appState === "results" && !chainLoading && (
-          <>
-            <div className={styles.chainHeader}>
-              <span className={styles.chainTitle}>Vocal Chain</span>
-              <div className={styles.chainMeta}>
-                {isEditing && (
-                  <span className={styles.editingBadge}>Editing</span>
-                )}
-                {chain.length > 0 && !isEditing && (
-                  <button
-                    type="button"
-                    className={styles.saveChainButton}
-                    onClick={handleSaveChain}
-                    disabled={saveBusy}
-                  >
-                    {saveBusy ? "Saving" : "Save chain"}
-                  </button>
-                )}
+                <button className={styles.skipLink} onClick={handleSkip}>
+                  Skip upload - explore without audio
+                </button>
               </div>
-            </div>
+            )}
 
-            {chain.length === 0 && (
+            {appState === "analyzing" && (
+              <div className={styles.analysisCard}>
+                {ANALYSIS_STEPS.map((step, i) => (
+                  <div key={i} className={styles.analysisRow}>
+                    <span className={styles.analysisText}>{step}</span>
+                    <CheckIcon className={styles.analysisCheck} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+	            {appState === "results" && chainLoading && (
+	              <div className={styles.skeleton}>
+	                <span className={styles.skeletonLabel}>
+	                  Regenerating chain from measured vocal context...
+	                </span>
+	                <div className={styles.skeletonLine} />
+	                <div className={styles.skeletonLine} />
+	                <div className={styles.skeletonLine} />
+              </div>
+            )}
+
+            {appState === "results" && !chainLoading && chain.length === 0 && (
               <div className={styles.rightEmpty}>
                 <span className={styles.rightEmptyDesc}>
                   Drag the XY cursor or upload audio to generate a chain.
@@ -1881,7 +2396,7 @@ export default function SandboxPage() {
               </div>
             )}
 
-            {displayedChain.length > 0 && (
+            {appState === "results" && !chainLoading && displayedChain.length > 0 && (
               <VisualVocalChain
                 chain={displayedChain}
                 engineerNote={engineerNote}
@@ -1893,7 +2408,11 @@ export default function SandboxPage() {
                 feedbackPanelOpen={editState.feedbackPanelOpen}
                 currentGenre={activeEra.id}
                 currentDaw={daw || "Logic Pro"}
-                validated={showValidatedStamp}
+                measuredFit={
+                  showMeasuredFitBadge ? "good" : editState.evaluationResult?.measured_fit
+                }
+                assistantHighlight={assistantHighlight}
+                audioPulse={audioPulse}
                 onEnterEditMode={handleEnterEditMode}
                 onEditedChainChange={handleEditedChainChange}
                 onEvaluate={handleEvaluateChain}
@@ -1902,10 +2421,38 @@ export default function SandboxPage() {
                 onFeedbackPanelOpenChange={handleFeedbackPanelOpenChange}
               />
             )}
-          </>
-        )}
-      </aside>
+          </section>
+        </main>
 
+        <AssistantPanel
+          activeEra={activeEra}
+          model={assistantModel}
+          eras={eras}
+          canApply={Boolean(cachedMetrics) && !chainLoading && !isEditing}
+          applying={chainLoading}
+          cursorX={cursorX}
+          cursorY={cursorY}
+          hasPendingGenerate={hasPendingGenerate}
+          padRef={padRef}
+          onEraChange={handleEraChange}
+          onApply={handleGenerate}
+          onReset={handleResetChain}
+          onFixSelect={handleAssistantFix}
+          onSliderX={handleSliderX}
+          onSliderY={handleSliderY}
+          onPadPointerDown={handlePadPointerDown}
+          onPadPointerMove={handlePadPointerMove}
+          onPadPointerUp={handlePadPointerUp}
+        />
+
+        <AudioTransport
+          rawUrl={rawAudioUrl}
+          processedUrl={processedAudioUrl}
+          trackName={currentVocal?.label ?? project?.name ?? "Lead Vocal"}
+          trackLabel={sessionBeatFileUrl ? "vocal + beat context" : "lead vocal"}
+          lufs={metricReadouts[0]?.value}
+          onPulseChange={setAudioPulse}
+        />
       </div>
 
       {/* ─────────────────────────────────────────────────
@@ -1928,5 +2475,480 @@ export default function SandboxPage() {
       />
     </div>
     </ProjectGate>
+  );
+}
+
+function AnimatedMetricValue({ value }: { value: string }) {
+  const [display, setDisplay] = useState(value);
+  const previous = useRef(value);
+
+  useEffect(() => {
+    const nextNumber = Number(value.match(/[+\-−]?\d+(?:\.\d+)?/)?.[0]?.replace("−", "-"));
+    const prevNumber = Number(previous.current.match(/[+\-−]?\d+(?:\.\d+)?/)?.[0]?.replace("−", "-"));
+    const suffix = value.replace(/[+\-−]?\d+(?:\.\d+)?/, "");
+
+    if (!Number.isFinite(nextNumber) || !Number.isFinite(prevNumber)) {
+      previous.current = value;
+      setDisplay(value);
+      return;
+    }
+
+    let frame = 0;
+    const frames = 12;
+    const timer = window.setInterval(() => {
+      frame += 1;
+      const t = frame / frames;
+      const eased = 1 - Math.pow(1 - t, 3);
+      const current = prevNumber + (nextNumber - prevNumber) * eased;
+      setDisplay(`${current.toFixed(Math.abs(nextNumber) >= 10 ? 1 : 1)}${suffix}`);
+
+      if (frame >= frames) {
+        window.clearInterval(timer);
+        previous.current = value;
+        setDisplay(value);
+      }
+    }, 16);
+
+    return () => window.clearInterval(timer);
+  }, [value]);
+
+  return <span>{display}</span>;
+}
+
+function WorkspaceMetricsBar({
+  readouts,
+  busyLabel,
+  canAnalyze,
+  onAnalyze,
+}: {
+  readouts: MetricReadout[];
+  busyLabel: string | null;
+  canAnalyze: boolean;
+  onAnalyze: () => void;
+}) {
+  return (
+    <section className={styles.metricsBar} aria-label="Project metrics">
+      {readouts.map((readout, index) => (
+        <div className={styles.metricCell} key={readout.label}>
+          <span className={styles.metricIcon} aria-hidden="true">
+            {index === 0 ? "||" : index === 1 ? "I" : index === 2 ? "o" : "++"}
+          </span>
+          <div>
+            <span className={styles.metricLabel}>{readout.label}</span>
+            <strong className={styles.metricValue}>
+              <AnimatedMetricValue value={readout.value} />
+            </strong>
+          </div>
+          <em className={styles.metricSource}>{readout.source}</em>
+        </div>
+      ))}
+      <button
+        type="button"
+        className={styles.autoAnalyzeButton}
+        onClick={onAnalyze}
+        disabled={!canAnalyze}
+	      >
+	        {busyLabel ?? "Auto Analyze"}
+	      </button>
+    </section>
+  );
+}
+
+function AssistantPanel({
+  activeEra,
+  model,
+  eras: eraOptions,
+  canApply,
+  applying,
+  cursorX,
+  cursorY,
+  hasPendingGenerate,
+  padRef,
+  onEraChange,
+  onApply,
+  onReset,
+  onFixSelect,
+  onSliderX,
+  onSliderY,
+  onPadPointerDown,
+  onPadPointerMove,
+  onPadPointerUp,
+}: {
+  activeEra: Era;
+  model: AssistantModel;
+  eras: Era[];
+  canApply: boolean;
+  applying: boolean;
+  cursorX: number;
+  cursorY: number;
+  hasPendingGenerate: boolean;
+  padRef: RefObject<HTMLDivElement | null>;
+  onEraChange: (era: Era) => void;
+  onApply: () => void;
+  onReset: () => void;
+  onFixSelect: (fix: AssistantFix) => void;
+  onSliderX: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onSliderY: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onPadPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPadPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPadPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <aside className={styles.assistantPanel}>
+      <div className={styles.assistantTabs}>
+        <span className={styles.assistantTabActive}>AI Assistant</span>
+        <span>Chain Insights</span>
+      </div>
+
+      <section className={styles.assistantSection}>
+        <span className={styles.assistantLabel}>Target vibe</span>
+        <div className={styles.vibePills}>
+          {eraOptions.map((era) => (
+            <button
+              key={era.id}
+              type="button"
+              className={`${styles.vibePill} ${
+                activeEra.id === era.id ? styles.vibePillActive : ""
+              }`}
+              onClick={() => onEraChange(era)}
+            >
+              {era.name}
+            </button>
+          ))}
+        </div>
+        <p className={styles.vibeSummary}>{model.vibeSummary}</p>
+      </section>
+
+      <section className={styles.assistantSection}>
+        <span className={styles.assistantLabel}>Vocal issues detected</span>
+        <div className={styles.issueListCompact}>
+          {model.issues.map((issue) => (
+            <div className={styles.issueRow} key={issue.id}>
+              <span
+                className={`${styles.issueDot} ${
+                  issue.severity === "critical"
+                    ? styles.issueDotCritical
+                    : issue.severity === "warning"
+                      ? styles.issueDotWarning
+                      : styles.issueDotNote
+                }`}
+              />
+              <span>
+                <strong>{issue.label}</strong>
+                <em>{issue.detail}</em>
+              </span>
+              <small>{issue.claim}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.assistantSection}>
+        <span className={styles.assistantLabel}>Recommended fixes</span>
+        <div className={styles.fixList}>
+          {model.fixes.map((fix) => (
+            <button
+              key={fix.id}
+              type="button"
+              className={styles.fixRow}
+              onClick={() => onFixSelect(fix)}
+            >
+              <span className={styles.fixCheck}>✓</span>
+              <span>
+                <strong>{fix.label}</strong>
+                <em>{fix.detail}</em>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.assistantSection}>
+        <span className={styles.assistantLabel}>One-click actions</span>
+        <button
+          type="button"
+          className={styles.applyMixButton}
+          onClick={onApply}
+          disabled={!canApply}
+        >
+          {applying ? "Applying..." : "Apply AI Mix"}
+        </button>
+        <button type="button" className={styles.resetChainButton} onClick={onReset}>
+          Reset Chain
+        </button>
+      </section>
+
+      <section className={`${styles.assistantSection} ${styles.xyPanelSection}`}>
+        <div className={styles.xyContainer}>
+          <div className={styles.sliderTopWrapper}>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={cursorX}
+              onChange={onSliderX}
+              className={styles.sleekSlider}
+              aria-label="Dry to wet"
+            />
+          </div>
+
+          <div className={styles.xyMiddleRow}>
+            <div className={styles.sliderLeftWrapper}>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={cursorY}
+                onChange={onSliderY}
+                className={`${styles.sleekSlider} ${styles.sliderVertical}`}
+                aria-label="Dark to bright"
+              />
+            </div>
+
+            <div
+              ref={padRef}
+              className={styles.xyPad}
+              onPointerDown={onPadPointerDown}
+              onPointerMove={onPadPointerMove}
+              onPointerUp={onPadPointerUp}
+              onPointerCancel={onPadPointerUp}
+            >
+              <span className={`${styles.xyAxisLabel} ${styles.xyAxisTop}`}>Bright</span>
+              <span className={`${styles.xyAxisLabel} ${styles.xyAxisBottom}`}>Dark</span>
+              <span className={`${styles.xyAxisLabel} ${styles.xyAxisLeft}`}>Dry</span>
+              <span className={`${styles.xyAxisLabel} ${styles.xyAxisRight}`}>Wet</span>
+              <AnimatedGrid cursorX={cursorX} cursorY={cursorY} />
+              <div
+                className={styles.xyCursor}
+                style={{
+                  left: `${cursorX * 100}%`,
+                  top: `${(1 - cursorY) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+        <span className={styles.xyHint}>
+          {hasPendingGenerate ? "Chain has unsaved XY changes" : "Adjust grid to generate"}
+        </span>
+      </section>
+    </aside>
+  );
+}
+
+function AudioTransport({
+  rawUrl,
+  processedUrl,
+  trackName,
+  trackLabel,
+  lufs,
+  onPulseChange,
+}: {
+  rawUrl: string | null;
+  processedUrl: string | null;
+  trackName: string;
+  trackLabel: string;
+  lufs?: string;
+  onPulseChange: (value: number) => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [volume, setVolume] = useState(0.82);
+  const [bypassed, setBypassed] = useState(true);
+  const canUseProcessed = Boolean(processedUrl);
+  const playbackUrl = !bypassed && processedUrl ? processedUrl : rawUrl;
+
+  const stopPulse = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    onPulseChange(0);
+  }, [onPulseChange]);
+
+  const startPulse = useCallback(() => {
+    const tick = () => {
+      const analyser = analyserRef.current;
+      if (!analyser) return;
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteTimeDomainData(data);
+      const sum = data.reduce((acc, value) => {
+        const centered = (value - 128) / 128;
+        return acc + centered * centered;
+      }, 0);
+      const rms = Math.sqrt(sum / data.length);
+      onPulseChange(Math.min(1, rms * 7));
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    tick();
+  }, [onPulseChange]);
+
+  const setupAnalyser = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio || sourceRef.current) {
+      await audioContextRef.current?.resume().catch(() => undefined);
+      return;
+    }
+
+    const AudioCtx =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioCtx) return;
+
+    try {
+      const context = new AudioCtx();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      const source = context.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+      audioContextRef.current = context;
+      sourceRef.current = source;
+      analyserRef.current = analyser;
+      await context.resume();
+    } catch {
+      analyserRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setPlaying(false);
+      setCurrentTime(0);
+      stopPulse();
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [playbackUrl, stopPulse]);
+
+  useEffect(
+    () => () => {
+      stopPulse();
+      void audioContextRef.current?.close().catch(() => undefined);
+    },
+    [stopPulse]
+  );
+
+  const togglePlay = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio || !playbackUrl) return;
+
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+      stopPulse();
+      return;
+    }
+
+    await setupAnalyser();
+    await audio.play().catch(() => undefined);
+    setPlaying(!audio.paused);
+    if (!audio.paused) {
+      startPulse();
+    }
+  }, [playbackUrl, playing, setupAnalyser, startPulse, stopPulse]);
+
+  const progress = duration > 0 ? currentTime / duration : 0;
+  const bars = Array.from({ length: 34 }, (_, index) => {
+    const base = 18 + ((index * 19) % 42);
+    const active = index / 34 <= progress;
+    return (
+      <span
+        key={index}
+        className={active ? styles.waveformBarActive : ""}
+        style={{ height: `${base}%` }}
+      />
+    );
+  });
+
+  return (
+    <section className={styles.transportBar} aria-label="Audio transport">
+      <audio
+        ref={audioRef}
+        src={playbackUrl ?? undefined}
+        crossOrigin="anonymous"
+        preload="metadata"
+        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onEnded={() => {
+          setPlaying(false);
+          stopPulse();
+        }}
+      />
+
+      <div className={styles.transportTrack}>
+        <button
+          type="button"
+          className={styles.playButton}
+          onClick={togglePlay}
+          disabled={!playbackUrl}
+          aria-label={playing ? "Pause" : "Play"}
+        >
+          {playing ? "||" : "▶"}
+        </button>
+        <span>
+          <strong>{trackName}</strong>
+          <em>{playbackUrl ? trackLabel : "no audio loaded"}</em>
+        </span>
+      </div>
+
+      <div className={styles.transportWaveform}>
+        <div className={styles.waveformBars}>{bars}</div>
+        <input
+          type="range"
+          min="0"
+          max={duration || 0}
+          step="0.01"
+          value={currentTime}
+          onChange={(event) => {
+            const nextTime = Number(event.target.value);
+            setCurrentTime(nextTime);
+            if (audioRef.current) audioRef.current.currentTime = nextTime;
+          }}
+          disabled={!playbackUrl || duration === 0}
+          aria-label="Scrub audio"
+        />
+      </div>
+
+      <div className={styles.transportTools}>
+        <span className={styles.transportLufs}>{lufs ?? "--"}</span>
+        <label className={styles.volumeControl}>
+          <span>Vol</span>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={volume}
+            onChange={(event) => setVolume(Number(event.target.value))}
+          />
+        </label>
+        <button
+          type="button"
+          className={`${styles.bypassToggle} ${bypassed ? styles.bypassToggleActive : ""}`}
+          disabled={!canUseProcessed}
+          onClick={() => setBypassed((value) => !value)}
+          aria-pressed={bypassed}
+          title={canUseProcessed ? "Toggle processed export monitor" : "No processed export to compare"}
+        >
+          Bypass
+        </button>
+      </div>
+    </section>
   );
 }

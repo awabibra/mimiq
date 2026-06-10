@@ -86,13 +86,13 @@ export default function Home() {
               <h1 className={styles.heroHeadline}>
                 Your vocal.
                 <br />
-                Your exact chain.
+                Your measured chain.
               </h1>
               <p className={styles.heroSubline}>
-                Upload your raw vocal. MimiQ measures it, then tells you exactly
-                how to mix it&nbsp;— step by step, for your DAW.
+                Upload your raw vocal. MimiQ measures it, then maps a focused
+                mixing path&nbsp;— step by step, for your DAW.
               </p>
-              <CTALink href="/onboarding" className={styles.ctaButton}>
+              <CTALink href="/entry" className={styles.ctaButton}>
                 Analyse your vocal free
               </CTALink>
               <span className={styles.heroSmall}>
@@ -136,10 +136,10 @@ export default function Home() {
               <div className={styles.stepCard}>
                 <span className={styles.stepNumber}>03</span>
                 <ListIcon />
-                <h3 className={styles.stepTitle}>Get your exact chain</h3>
+                <h3 className={styles.stepTitle}>Get a measured chain</h3>
                 <p className={styles.stepText}>
-                  A numbered, DAW-specific mixing chain tailored to your voice.
-                  Open your DAW and follow the steps.
+                  A numbered, DAW-specific starting chain shaped by your vocal
+                  metrics. Open your DAW and follow the steps.
                 </p>
               </div>
             </div>
@@ -177,7 +177,7 @@ export default function Home() {
               Join producers who&apos;ve stopped watching tutorials and started
               hearing results.
             </p>
-            <CTALink href="/onboarding" className={styles.ctaButton}>
+            <CTALink href="/entry" className={styles.ctaButton}>
               Analyse your vocal free
             </CTALink>
           </section>
