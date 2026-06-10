@@ -10,18 +10,22 @@
   /* ── Backgrounds ── */
   --bg-base: #0A0A0C;
   --bg-surface: #161618;
+  --bg-elevated: #1E1E20;
 
   /* ── Borders ── */
   --border-default: rgba(255, 255, 255, 0.06);
   --border-hover: rgba(255, 255, 255, 0.04);
+  --border-subtle: rgba(255, 255, 255, 0.08);
 
   /* ── Text ── */
   --text-primary: #F2F2F0;
   --text-secondary: #888884;
   --text-tertiary: #4A4A47;
+  --text-muted: var(--text-secondary);
 
   /* ── Era accent (default: Golden / hip-hop) ── */
   --accent: #D4A84B;
+  --accent-lime: #D7FF3F;
 
   /* ── Typography ── */
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -56,6 +60,21 @@
   --transition-element: 280ms cubic-bezier(0.16, 1, 0.3, 1);
   /* Page: navigating between views — opacity + translateY (320ms) */
   --transition-page: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-snap: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html[data-theme="beige"] {
+  --bg-base: #F5F0E8;
+  --bg-surface: #EDE8DF;
+  --bg-elevated: #E5DFD4;
+  --border-default: #00000010;
+  --border-hover: #00000018;
+  --border-subtle: #00000010;
+  --text-primary: #1A1A1A;
+  --text-secondary: #6B6460;
+  --text-tertiary: #91877F;
+  --text-muted: #6B6460;
+  --accent-lime: #8DB600;
 }
 
 /* ── Tailwind theme bridge ── */
