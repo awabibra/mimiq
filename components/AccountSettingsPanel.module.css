@@ -1,0 +1,560 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 301;
+  width: 380px;
+  max-width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px 24px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-subtle);
+  box-shadow:
+    -24px 0 70px rgba(0, 0, 0, 0.42),
+    inset 1px 0 0 rgba(255, 255, 255, 0.035);
+}
+
+.closeButton {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    color var(--transition),
+    background var(--transition),
+    transform var(--transition);
+}
+
+.closeButton:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.closeButton:active {
+  transform: scale(0.96);
+}
+
+.profileHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 36px;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #0A0A0C;
+  background: var(--accent-lime);
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent-lime) 22%, transparent);
+}
+
+.profileCopy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.displayName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planBadge {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 2px 8px;
+  border: 0.5px solid color-mix(in srgb, var(--accent-lime) 36%, transparent);
+  border-radius: var(--radius-pill);
+  color: var(--accent-lime);
+  background: color-mix(in srgb, var(--accent-lime) 8%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.section {
+  display: grid;
+  gap: 12px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sectionLabel {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.analyticsSection {
+  gap: 16px;
+  padding-top: 20px;
+}
+
+.analyticsHeading {
+  display: grid;
+  gap: 5px;
+}
+
+.analyticsKicker {
+  color: var(--accent-lime);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.analyticsTitle {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.analyticsTitleSkeleton,
+.skeletonStat,
+.skeletonLine,
+.skeletonLineShort {
+  display: block;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 3%, transparent);
+  animation: usagePulse 1.2s var(--ease-snap) infinite alternate;
+}
+
+.analyticsTitleSkeleton {
+  width: 76%;
+  height: 14px;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.statItem {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 12px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.statValue {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-lime);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statLabel {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.25;
+}
+
+.soundBlock,
+.activityBlock,
+.sparklineBlock {
+  display: grid;
+  gap: 11px;
+}
+
+.soundHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.soundMeta,
+.sparklineMeta {
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.genreBars {
+  display: grid;
+  gap: 10px;
+}
+
+.genreRow {
+  display: grid;
+  gap: 6px;
+}
+
+.genreMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.genreName {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genreCount {
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.genreTrack {
+  position: relative;
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+}
+
+.genreFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 7px;
+  border-radius: inherit;
+  transform-origin: left center;
+}
+
+.genreFillTop {
+  background: var(--accent-lime);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent-lime) 28%, transparent);
+}
+
+.genreFillRest {
+  background: var(--text-secondary);
+  opacity: 0.72;
+}
+
+.activityFeed {
+  display: grid;
+  gap: 8px;
+}
+
+.activityItem {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.activityIcon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent-lime) 20%, var(--border-subtle));
+  border-radius: 7px;
+  color: var(--accent-lime);
+  background: color-mix(in srgb, var(--accent-lime) 7%, transparent);
+}
+
+.activityIcon svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.activityText {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityTime {
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.storyFallback {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.sparklineBlock {
+  padding-top: 2px;
+}
+
+.sparkline {
+  width: 100%;
+  height: 76px;
+  display: block;
+  overflow: visible;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-surface) 74%, transparent);
+}
+
+.sparklineAxis {
+  fill: none;
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+.sparklineFill {
+  fill: var(--bg-elevated);
+  opacity: 0.78;
+}
+
+.sparklineLine {
+  fill: none;
+  stroke: var(--accent-lime);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent-lime) 30%, transparent));
+}
+
+.skeletonStat {
+  height: 62px;
+}
+
+.skeletonStack {
+  display: grid;
+  gap: 10px;
+}
+
+.skeletonLine,
+.skeletonLineShort {
+  height: 14px;
+}
+
+.skeletonLineShort {
+  width: 68%;
+}
+
+@keyframes usagePulse {
+  from {
+    opacity: 0.38;
+  }
+
+  to {
+    opacity: 0.82;
+  }
+}
+
+.themeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.themeOption {
+  min-width: 0;
+  height: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  color: #FFFFFF;
+  background: #08080A;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
+}
+
+.themeOptionActive {
+  border-color: var(--accent-lime);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-lime) 18%, transparent);
+}
+
+.themeOption:active {
+  transform: scale(0.98);
+}
+
+.beigeOption {
+  color: #1A1A1A;
+  background: #F5F0E8;
+}
+
+.themeSwatch {
+  width: 28px;
+  height: 18px;
+  border-radius: 5px;
+  border: 0.5px solid rgba(255, 255, 255, 0.18);
+}
+
+.darkSwatch {
+  background: #050505;
+}
+
+.beigeSwatch {
+  border-color: #00000018;
+  background: #F5F0E8;
+}
+
+.actionStack {
+  display: grid;
+  gap: 10px;
+}
+
+.ghostButton {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--transition),
+    background var(--transition),
+    border-color var(--transition),
+    transform var(--transition),
+    opacity var(--transition);
+}
+
+.ghostButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-primary) 16%, var(--border-subtle));
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.ghostButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ghostButton:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.dangerSection {
+  margin-top: auto;
+}
+
+.deleteButton {
+  width: 100%;
+  height: 34px;
+  border: none;
+  color: var(--text-muted);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--transition),
+    transform var(--transition);
+}
+
+.deleteButton:hover {
+  color: var(--text-primary);
+}
+
+.deleteButton:active {
+  transform: scale(0.98);
+}
+
+.message {
+  padding: 10px 11px;
+  border: 0.5px solid color-mix(in srgb, var(--accent-lime) 28%, transparent);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent-lime) 7%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 460px) {
+  .panel {
+    width: 100vw;
+  }
+}
