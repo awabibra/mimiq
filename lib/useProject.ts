@@ -8,10 +8,16 @@ import type {
   MixRoomEQCut,
   MixRoomReport,
   Project,
+  ProjectAudioAsset,
   ProjectChainEntry,
   ProjectPatch,
   VocalVersion,
 } from "@/lib/types";
+import {
+  getPrimaryVocalAsset,
+  getProjectAudioAssets,
+  upsertProjectAudioAsset,
+} from "@/lib/projectAudio";
 
 export const ACTIVE_PROJECT_STORAGE_KEY = "mimiq-active-project";
 
@@ -21,6 +27,7 @@ export interface ProjectState {
   setActiveProject: (project: Project) => void;
   clearActiveProject: () => void;
   updateProject: (patch: ProjectPatch) => void;
+  upsertAudioAsset: (asset: ProjectAudioAsset) => void;
   addVocalVersion: (version: VocalVersion) => void;
   addGeneratedChain: (chain: GeneratedChain) => void;
   addMixRoomEQCut: (cut: Omit<MixRoomEQCut, "id" | "created_at"> & Partial<Pick<MixRoomEQCut, "id" | "created_at">>) => MixRoomEQCut | null;
@@ -118,6 +125,7 @@ export function createLocalProject(params: {
     name: `${params.daw} sandbox`,
     created_at: now,
     updated_at: now,
+    audio_assets: [],
     beat_file_url: null,
     beat_filename: null,
     vocal_versions: [],
@@ -171,14 +179,31 @@ export const useProject = create<ProjectState>()(
       prompt: null,
       setActiveProject: (project) => set({ project, prompt: null }),
       clearActiveProject: () => set({ project: null, prompt: null }),
-      updateProject: (patch) =>
-        set((state) => {
-          if (!state.project) return state;
+	      updateProject: (patch) =>
+	        set((state) => {
+	          if (!state.project) return state;
 
           return {
             project: {
               ...state.project,
               ...withUpdatedAt(patch),
+	            },
+	          };
+	        }),
+      upsertAudioAsset: (asset) =>
+        set((state) => {
+          if (!state.project) return state;
+
+          const audio_assets = upsertProjectAudioAsset(
+            getProjectAudioAssets(state.project),
+            asset
+          );
+
+          return {
+            project: {
+              ...state.project,
+              audio_assets,
+              updated_at: new Date().toISOString(),
             },
           };
         }),
@@ -283,12 +308,27 @@ export async function rehydrateActiveProject() {
 }
 
 export function getCurrentVocal(project: Project | null) {
+  const asset = getPrimaryVocalAsset(project);
+  if (asset?.storagePath) {
+    return {
+      id: asset.id,
+      filename: asset.filename,
+      url: asset.storagePath,
+      uploaded_at: asset.createdAt,
+      label: asset.filename,
+    };
+  }
+
   if (!project || project.vocal_versions.length === 0) return null;
 
   const lastIndex = project.vocal_versions.length - 1;
   const index = Math.max(0, Math.min(project.current_vocal_index, lastIndex));
 
   return project.vocal_versions[index] ?? null;
+}
+
+export function getCurrentVocalAsset(project: Project | null) {
+  return getPrimaryVocalAsset(project);
 }
 
 export function isGeneratedChain(entry: unknown): entry is GeneratedChain {

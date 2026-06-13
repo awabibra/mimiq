@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Shared types for the MimiQ analysis pipeline
+   Shared types for the mimiq analysis pipeline
    ═══════════════════════════════════════════════════════════════ */
 
 /** Raw metrics returned by the Python audio analysis service. */
@@ -69,6 +69,29 @@ export interface AnalysisResponse {
 
 export type AudioServiceStatus = "ok" | "fallback" | "error" | "unknown";
 
+export type AudioAssetKind =
+  | "full_song"
+  | "vocal"
+  | "beat"
+  | "stem"
+  | "reference"
+  | "processed";
+
+export type AudioAssetStatus = "local" | "uploading" | "ready" | "failed";
+
+export interface ProjectAudioAsset {
+  id: string;
+  kind: AudioAssetKind;
+  filename: string;
+  mimeType: string;
+  size: number;
+  duration: number | null;
+  storagePath: string | null;
+  createdAt: string;
+  status: AudioAssetStatus;
+  error?: string | null;
+}
+
 /** Full structured response from Claude / the level-lab route. */
 export interface LevelLabResponse {
   sessionScore: number;
@@ -81,6 +104,8 @@ export interface LevelLabResponse {
   rawMetrics?: LevelMetrics;
   processedMetrics: LevelMetrics;
   delta: LevelLabDelta;
+  rawAssetId?: string | null;
+  processedAssetId?: string | null;
   audio_service_status?: AudioServiceStatus;
   fallback_used?: boolean;
   fallback_reason?: string | null;
@@ -124,6 +149,8 @@ export interface EvaluationResult {
   measured_fit: "good" | "needs_work" | "unknown";
   flags: string[];
   explanation: string;
+  checked?: string[];
+  unknowns?: string[];
 }
 
 /** A saved chain record from the Supabase `chains` table. */
@@ -157,6 +184,9 @@ export interface GeneratedChain {
     measurements?: AudioMetrics;
     xyPosition?: XYPosition;
     analysis_version?: "1.0";
+    sourceAssetId?: string | null;
+    beatAssetId?: string | null;
+    analysisInputKind?: "vocal" | "full_song" | "fallback";
     fallback_used?: boolean;
     audio_service_status?: AudioServiceStatus;
     measured_fit?: EvaluationResult["measured_fit"];
@@ -223,6 +253,9 @@ export interface MixRoomReport {
   analyzed_at?: string;
   vocal_version_id?: string | null;
   beat_file_url?: string | null;
+  vocal_asset_id?: string | null;
+  beat_asset_id?: string | null;
+  full_song_asset_id?: string | null;
   vocal_source?: string | null;
   beat_source?: string | null;
   genre?: string;
@@ -244,6 +277,7 @@ export interface Project {
   name: string;
   created_at: string;
   updated_at: string;
+  audio_assets: ProjectAudioAsset[];
   beat_file_url: string | null;
   beat_filename: string | null;
   vocal_versions: VocalVersion[];
@@ -260,6 +294,7 @@ export type ProjectPatch = Partial<
     Project,
     | "name"
     | "updated_at"
+    | "audio_assets"
     | "beat_file_url"
     | "beat_filename"
     | "vocal_versions"
@@ -271,3 +306,79 @@ export type ProjectPatch = Partial<
     | "last_opened_at"
   >
 >;
+
+export type StemSplitMode = 2 | 4 | 6;
+export type StemSplitStatus = "idle" | "uploading" | "queued" | "processing" | "complete" | "failed";
+export type StemSplitLaneName =
+  | "vocals"
+  | "drums"
+  | "bass"
+  | "other"
+  | "guitar"
+  | "piano";
+
+export interface StemSplitFileMeta {
+  filename: string;
+  duration_s: number;
+  sample_rate: number;
+  bit_depth: number | null;
+  channels?: number;
+}
+
+export interface StemSplitLane {
+  name: StemSplitLaneName;
+  filename: string;
+  url: string;
+  fileMeta?: StemSplitFileMeta | null;
+}
+
+export interface StemSplitFallback {
+  requested_mode: StemSplitMode;
+  requested_model: string;
+  requested_stems: StemSplitLaneName[];
+  delivered_mode: StemSplitMode;
+  delivered_stems: StemSplitLaneName[];
+  available_stems: StemSplitLaneName[];
+  reason: string;
+}
+
+export interface StemSplitSourceMeta {
+  duration: number;
+  sample_rate: number;
+  channels: number;
+  bpm: number | null;
+  bit_depth: number | null;
+}
+
+export interface StemSplitJobResponse {
+  job_id: string;
+  status: Exclude<StemSplitStatus, "idle" | "uploading">;
+  progress: number;
+  stage: string;
+  requested_mode: StemSplitMode;
+  requested_model: string;
+  created_at: string;
+  updated_at: string;
+  source_filename: string;
+  source?: StemSplitSourceMeta;
+  message?: string;
+  error?: string;
+  stems?: Record<string, StemSplitLane>;
+  fallback?: StemSplitFallback | null;
+  estimated_remaining_seconds: number | null;
+}
+
+export interface StemSplitInsightClaims {
+  measured: string[];
+  inferred: string[];
+  estimated: string[];
+  unknown: string[];
+}
+
+export type StemSplitInsightStatus = "idle" | "loading" | "ready" | "error";
+
+export interface StemSplitInsightResponse {
+  status: StemSplitInsightStatus;
+  summary: string;
+  claims: StemSplitInsightClaims;
+}

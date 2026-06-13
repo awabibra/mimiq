@@ -1,9 +1,11 @@
 import io
+import re
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -13,9 +15,9 @@ from typing import Optional
 import numpy as np
 import librosa
 import soundfile as sf
-from fastapi import BackgroundTasks, FastAPI, File, UploadFile, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -55,7 +57,15 @@ class VocalDiagnosticResponse(BaseModel):
     chordProgression: str
     summary: str
 
-STEM_NAMES = ("vocals", "drums", "bass", "other")
+STEM_NAMES = ("vocals", "drums", "bass", "piano", "guitar", "other")
+STEM_MODE_ORDER = {
+    2: ("vocals", "other"),
+    4: ("vocals", "drums", "bass", "other"),
+    6: ("vocals", "drums", "bass", "piano", "guitar", "other"),
+}
+ALLOWED_STEM_FORMATS = {".wav", ".mp3", ".flac"}
+DEFAULT_STEM_MODE = 4
+DEFAULT_STEM_MODEL = "htdemucs"
 MAX_STEM_FILE_SIZE = 50 * 1024 * 1024
 STEM_JOB_ROOT = Path(
     os.getenv("MIMIQ_STEM_JOB_DIR", Path(tempfile.gettempdir()) / "mimiq-stems")
@@ -75,19 +85,93 @@ def utc_now() -> str:
 def stem_download_url(job_id: str, stem: str) -> str:
     return f"/api/split-stems/{job_id}/files/{stem}"
 
+def estimate_remaining_ms(progress: float, started_at: Optional[str]) -> Optional[float]:
+    if started_at is None or not progress or progress <= 0:
+        return None
+
+    try:
+        started = datetime.fromisoformat(started_at)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    except ValueError:
+        return None
+
+    if progress >= 100:
+        return 0.0
+
+    ratio = progress / 100.0
+    if ratio <= 0:
+        return None
+
+    remaining = elapsed * (1 - ratio) / ratio
+    return round(max(0.0, remaining), 2)
+
+def stem_mode_from_request(requested_mode: int) -> tuple[str, ...]:
+    return STEM_MODE_ORDER.get(requested_mode, STEM_MODE_ORDER[DEFAULT_STEM_MODE])
+
+def parse_bit_depth(subtype: str | None) -> int | None:
+    if not subtype:
+        return None
+
+    match = re.search(r"(\d+)", subtype)
+    return int(match.group(1)) if match else None
+
+def collect_stem_metadata(path: Path) -> dict:
+    info = sf.info(str(path))
+    duration = round(float(info.frames / max(1, info.samplerate)), 3)
+    return {
+        "duration_s": round(duration, 3),
+        "sample_rate": info.samplerate,
+        "bit_depth": parse_bit_depth(info.subtype),
+        "channels": info.channels,
+    }
+
+def collect_source_metadata(path: Path) -> dict:
+    info = sf.info(str(path))
+    duration = round(float(info.frames / max(1, info.samplerate)), 3)
+    return {
+        "duration": round(duration, 3),
+        "sample_rate": info.samplerate,
+        "channels": info.channels,
+        "bpm": None,
+        "bit_depth": parse_bit_depth(info.subtype),
+    }
+
+def compute_source_bpm(path: Path) -> float | None:
+    try:
+        samples, sample_rate = load_audio_bytes(path.read_bytes(), duration=None)
+        bpm = librosa.beat.tempo(y=samples, sr=sample_rate)
+        bpm_value = float(np.atleast_1d(bpm)[0]) if bpm is not None else None
+        return round(bpm_value, 1) if bpm_value is not None and bpm_value > 1.0 else None
+    except Exception:
+        return None
+
 def public_job(job_id: str, job: dict) -> dict:
+    progress = float(job.get("progress", 0) or 0)
+    started_at = job.get("started_at")
+    estimated_remaining_seconds = estimate_remaining_ms(progress, started_at)
+    stage = job.get("stage") or "Ready"
+
     response = {
         "job_id": job_id,
         "status": job["status"],
         "created_at": job["created_at"],
         "updated_at": job["updated_at"],
+        "progress": min(100, max(0, int(progress))),
+        "stage": stage,
+        "requested_mode": job.get("requested_mode", DEFAULT_STEM_MODE),
+        "requested_model": job.get("requested_model", DEFAULT_STEM_MODEL),
         "source_filename": job["source_filename"],
+        "estimated_remaining_seconds": estimated_remaining_seconds,
     }
 
     if job.get("message"):
         response["message"] = job["message"]
     if job.get("error"):
         response["error"] = job["error"]
+    if job.get("source"):
+        response["source"] = job["source"]
+    if job.get("fallback"):
+        response["fallback"] = job["fallback"]
     if job.get("stems"):
         response["stems"] = job["stems"]
 
@@ -99,11 +183,23 @@ def update_stem_job(job_id: str, **patch: object) -> None:
             stem_jobs[job_id].update(patch)
             stem_jobs[job_id]["updated_at"] = utc_now()
 
-def run_stem_split(job_id: str, input_path: Path, job_dir: Path) -> None:
+def run_stem_split(
+    job_id: str,
+    input_path: Path,
+    job_dir: Path,
+    requested_mode: int,
+    requested_model: str,
+) -> None:
+    requested_stems = stem_mode_from_request(requested_mode)
     update_stem_job(
         job_id,
         status="processing",
-        message="Separating stems with Demucs htdemucs.",
+        progress=4,
+        stage="initializing",
+        message="Preparing demucs split job.",
+        requested_mode=requested_mode,
+        requested_model=requested_model,
+        started_at=utc_now(),
     )
 
     try:
@@ -111,12 +207,23 @@ def run_stem_split(job_id: str, input_path: Path, job_dir: Path) -> None:
         stems_dir = job_dir / "stems"
         stems_dir.mkdir(parents=True, exist_ok=True)
 
+        source_meta = collect_source_metadata(input_path)
+        source_meta["bpm"] = compute_source_bpm(input_path)
+        update_stem_job(job_id, source=source_meta)
+
+        update_stem_job(
+            job_id,
+            progress=20,
+            stage="split_started",
+            message="Demucs processing started.",
+        )
+
         cmd = [
             sys.executable,
             "-m",
             "demucs.separate",
             "-n",
-            "htdemucs",
+            requested_model,
             "--out",
             str(output_dir),
             str(input_path),
@@ -126,30 +233,60 @@ def run_stem_split(job_id: str, input_path: Path, job_dir: Path) -> None:
             capture_output=True,
             check=False,
             text=True,
+            timeout=1200,
         )
 
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "Demucs failed.").strip()
             raise RuntimeError(message[-1200:])
 
-        stems: dict[str, dict[str, str]] = {}
+        update_stem_job(job_id, progress=80, stage="collecting", message="Collecting stems.")
+
+        available_stems: list[str] = []
         for stem in STEM_NAMES:
+            if list(output_dir.rglob(f"{stem}.wav")):
+                available_stems.append(stem)
+
+        delivered_stems = [stem for stem in requested_stems if stem in available_stems]
+        if not delivered_stems:
+            raise RuntimeError("No requested stems were produced by demucs.")
+
+        delivered_mode = len(delivered_stems)
+        fallback = None
+        if delivered_mode < len(requested_stems):
+            fallback = {
+                "requested_mode": requested_mode,
+                "requested_model": requested_model,
+                "requested_stems": list(requested_stems),
+                "delivered_mode": max(delivered_mode, 0),
+                "delivered_stems": delivered_stems,
+                "available_stems": available_stems,
+                "reason": "Requested stem mode is unavailable on this host.",
+            }
+
+        stems: dict[str, dict[str, str]] = {}
+        for stem in delivered_stems:
             matches = sorted(output_dir.rglob(f"{stem}.wav"))
             if not matches:
-                raise RuntimeError(f"Demucs did not produce {stem}.wav.")
+                raise RuntimeError(f"Demucs output missing {stem}.wav.")
 
             stable_path = stems_dir / f"{stem}.wav"
             shutil.copyfile(matches[0], stable_path)
+            file_meta = collect_stem_metadata(stable_path)
             stems[stem] = {
                 "name": stem,
                 "filename": f"{stem}.wav",
                 "url": stem_download_url(job_id, stem),
+                "fileMeta": file_meta,
             }
 
         update_stem_job(
             job_id,
             status="complete",
+            progress=100,
+            stage="complete",
             message="Stem split complete.",
+            fallback=fallback,
             stems=stems,
         )
     except Exception as exc:
@@ -160,10 +297,13 @@ def run_stem_split(job_id: str, input_path: Path, job_dir: Path) -> None:
             error=str(exc),
         )
 
-def load_audio_bytes(file_bytes: bytes) -> tuple[np.ndarray, int]:
+def load_audio_bytes(file_bytes: bytes, duration: Optional[float] = 60.0) -> tuple[np.ndarray, int]:
     buf = io.BytesIO(file_bytes)
     try:
-        y, sr = librosa.load(buf, sr=None, mono=True, duration=60.0)
+        kwargs = {"sr": None, "mono": True}
+        if duration is not None:
+            kwargs["duration"] = duration
+        y, sr = librosa.load(buf, **kwargs)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not decode audio: {str(e)}")
     return y, sr
@@ -504,12 +644,16 @@ async def diagnose_vocal(vocal: UploadFile = File(...)):
 async def split_stems(
     background_tasks: BackgroundTasks,
     audio: UploadFile = File(...),
+    mode: int = Form(DEFAULT_STEM_MODE),
+    model: str = Form(DEFAULT_STEM_MODEL),
 ):
     filename = audio.filename or "audio"
     suffix = Path(filename).suffix.lower()
 
-    if suffix not in {".wav", ".mp3"}:
-        raise HTTPException(status_code=415, detail="Upload a .wav or .mp3 file.")
+    if mode not in {2, 4, 6}:
+        raise HTTPException(status_code=400, detail="Stem mode must be 2, 4, or 6.")
+    if suffix not in ALLOWED_STEM_FORMATS:
+        raise HTTPException(status_code=415, detail="Upload a .wav, .mp3, or .flac file.")
 
     file_bytes = await audio.read()
     if len(file_bytes) == 0:
@@ -533,7 +677,27 @@ async def split_stems(
             "message": "Stem split queued.",
         }
 
-    background_tasks.add_task(run_stem_split, job_id, input_path, job_dir)
+    selected_model = (model or DEFAULT_STEM_MODEL).strip() or DEFAULT_STEM_MODEL
+
+    with stem_job_lock:
+        stem_jobs[job_id].update(
+            {
+                "requested_mode": mode,
+                "requested_model": selected_model,
+                "progress": 0,
+                "stage": "queued",
+                "source": collect_source_metadata(input_path),
+            }
+        )
+
+    background_tasks.add_task(
+        run_stem_split,
+        job_id,
+        input_path,
+        job_dir,
+        mode,
+        selected_model,
+    )
     return public_job(job_id, stem_jobs[job_id])
 
 @app.get("/api/split-stems/{job_id}")
@@ -567,6 +731,44 @@ async def download_stem(job_id: str, stem: str):
         stem_path,
         filename=f"{stem}.wav",
         media_type="audio/wav",
+    )
+
+@app.get("/api/split-stems/{job_id}/zip")
+async def download_stem_zip(job_id: str):
+    with stem_job_lock:
+        job = stem_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Stem split job not found.")
+    if job.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="Stem split is not complete.")
+
+    stems = job.get("stems")
+    if not stems:
+        raise HTTPException(status_code=404, detail="Stem files are unavailable.")
+
+    stem_dir = STEM_JOB_ROOT / job_id / "stems"
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for stem_name in stems:
+            file_path = stem_dir / f"{stem_name}.wav"
+            if file_path.exists():
+                zip_file.write(file_path, arcname=f"{stem_name}.wav")
+
+    if zip_buffer.tell() == 0:
+        raise HTTPException(status_code=404, detail="Stem files are unavailable.")
+
+    zip_buffer.seek(0)
+    safe_job = re.sub(r"[^a-zA-Z0-9_-]", "_", job_id)
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_job}-stems.zip"',
+            "Cache-Control": "no-store",
+        },
     )
 
 @app.get("/health")

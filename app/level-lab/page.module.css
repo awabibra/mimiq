@@ -11,7 +11,6 @@
   display: grid;
   grid-template-rows: 74px minmax(0, 1fr) 64px;
   min-width: 0;
-  height: 100vh;
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
@@ -350,6 +349,55 @@
   align-items: center;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.deltaCard,
+.summaryCard,
+.previewComparisonBar,
+.uploadCard,
+.uploadMiniWidget {
+  border-top-color: rgba(255, 255, 255, 0.16);
+  box-shadow: var(--studio-panel-shadow);
+}
+
+.deltaName,
+.summaryTop,
+.panelLabel,
+.beforeLabel {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+.deltaName {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.verdictBuckets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.verdictBuckets span {
+  display: grid;
+  min-width: 0;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 7px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.verdictBuckets span[data-active="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 34%, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .metricPill span {

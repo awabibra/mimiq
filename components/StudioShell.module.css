@@ -1,0 +1,162 @@
+.shell {
+  display: flex;
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--text-primary);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 34%),
+    radial-gradient(circle at 50% -18%, rgba(255, 255, 255, 0.055), transparent 28%),
+    var(--bg-base);
+}
+
+.workspace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.13;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.18) 0.6px, transparent 0.6px);
+  background-size: 5px 5px;
+  mix-blend-mode: overlay;
+}
+
+.workspace > * {
+  position: relative;
+  z-index: 1;
+}
+
+.content {
+  min-width: 0;
+  min-height: 0;
+  height: calc(100vh - 58px);
+  overflow: hidden;
+}
+
+.contentSurface {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.contextStrip {
+  display: grid;
+  grid-template-columns: 0.7fr 1.25fr 1.15fr 1fr 0.9fr;
+  min-height: 58px;
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.008)),
+    rgba(5, 5, 5, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.042);
+  animation: studioContextIn 360ms var(--ease-fade) both;
+}
+
+.contextCell {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 18px;
+  border-right: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.contextCell:last-child {
+  border-right: 0;
+}
+
+.contextCell span {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.contextCell strong {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextCell strong[data-evidence="measured"] {
+  color: var(--accent);
+  text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.contextCell strong[data-evidence="fallback labeled"] {
+  color: #d4a84b;
+}
+
+@keyframes studioContextIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 960px) {
+  .contextStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .contextCell:nth-child(n + 5) {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .shell {
+    display: block;
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+
+  .workspace {
+    min-height: 100dvh;
+    padding-bottom: 72px;
+  }
+
+  .content {
+    box-sizing: border-box;
+    height: calc(100dvh - 126px);
+    padding-bottom: 112px;
+  }
+
+  .contextStrip {
+    grid-template-columns: 1fr 1fr;
+    min-height: 54px;
+  }
+
+  .contextCell {
+    padding: 0 14px;
+  }
+
+  .contextCell:nth-child(n + 3) {
+    display: none;
+  }
+}

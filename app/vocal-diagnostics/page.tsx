@@ -1,12 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
+import { AudioAssetPicker } from "@/components/AudioAssetPicker";
+import { Sidebar } from "@/components/Sidebar";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { ProjectGate } from "@/components/ProjectGate";
-import { Sidebar } from "@/components/Sidebar";
+
+import { authHeaders } from "@/lib/apiAuth";
 import { defaultEra, eras, type Era } from "@/lib/eras";
 import { useStore } from "@/lib/store";
 import { useProject } from "@/lib/useProject";
+import {
+  getPrimaryVocalAsset,
+  getProjectAudioAssets,
+} from "@/lib/projectAudio";
 import styles from "./page.module.css";
 
 interface DiagnosticResult {
@@ -56,25 +64,6 @@ const NOTE_TO_PC: Record<string, number> = {
 const MAJOR_INTERVALS = [0, 2, 4, 5, 7, 9, 11];
 const MINOR_INTERVALS = [0, 2, 3, 5, 7, 8, 10];
 
-function UploadArrowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 16V4" />
-      <path d="M7 9l5-5 5 5" />
-      <path d="M5 20h14" />
-    </svg>
-  );
-}
-
 function DialIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -94,36 +83,6 @@ function DialIcon({ className }: { className?: string }) {
   );
 }
 
-function AnimatedDashedBorder() {
-  return (
-    <svg
-      className={styles.dashedSvg}
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <rect
-        className={styles.dashedRectPrimary}
-        x="0.5"
-        y="0.5"
-        width="99"
-        height="99"
-        rx="3"
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect
-        className={styles.dashedRectSecondary}
-        x="0.5"
-        y="0.5"
-        width="99"
-        height="99"
-        rx="3"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
-}
-
 function readFileError(res: Response) {
   return res.json().then(
     (data: ApiError) =>
@@ -132,9 +91,16 @@ function readFileError(res: Response) {
   );
 }
 
-function isAcceptedAudio(file: File) {
+function isAcceptedAudio(file: File | null) {
+  if (!file) return true;
   const name = file.name.toLowerCase();
-  return name.endsWith(".wav") || name.endsWith(".mp3");
+  return (
+    name.endsWith(".wav") ||
+    name.endsWith(".mp3") ||
+    name.endsWith(".flac") ||
+    name.endsWith(".aif") ||
+    name.endsWith(".aiff")
+  );
 }
 
 function formatFileSize(size: number) {
@@ -419,9 +385,14 @@ export default function VocalDiagnosticsPage() {
   const { era: storeEra, setEra } = useStore();
   const activeEra = eras.find((era) => era.id === storeEra) || defaultEra;
   const project = useProject((state) => state.project);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [dragOver, setDragOver] = useState(false);
+  const projectVocalAsset = getPrimaryVocalAsset(project);
+  const projectAudioAssets = getProjectAudioAssets(project);
+  const [selectedDiagnosticAssetId, setSelectedDiagnosticAssetId] = useState<string | null>(null);
+  const [selectedBeatAssetId, setSelectedBeatAssetId] = useState<string | null>(null);
+  const diagnosticAsset =
+    projectAudioAssets.find((asset) => asset.id === selectedDiagnosticAssetId) ??
+    projectVocalAsset;
+  const beatAsset = projectAudioAssets.find((asset) => asset.id === selectedBeatAssetId) ?? null;
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [result, setResult] = useState<DiagnosticResult | null>(null);
   const [waveform, setWaveform] = useState<WaveformData | null>(null);
@@ -440,22 +411,24 @@ export default function VocalDiagnosticsPage() {
   );
 
   const reset = useCallback(() => {
-    setDragOver(false);
     setSourceFile(null);
     setResult(null);
     setWaveform(null);
     setIsProcessing(false);
     setErrorText(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
-  const diagnoseFile = useCallback(async (file: File) => {
+  const diagnoseFile = useCallback(async (params: {
+    file?: File | null;
+    assetId?: string | null;
+  }) => {
+    const file = params.file ?? null;
     if (!isAcceptedAudio(file)) {
-      setErrorText("Vocal Diagnostics accepts .wav or .mp3.");
+      setErrorText("Vocal Diagnostics accepts .wav, .mp3, .flac, or .aiff.");
       return;
     }
 
-    if (file.size > MAX_FILE_SIZE) {
+    if (file && file.size > MAX_FILE_SIZE) {
       setErrorText("Vocal file exceeds 50 MB.");
       return;
     }
@@ -468,13 +441,17 @@ export default function VocalDiagnosticsPage() {
 
     try {
       const form = new FormData();
-      form.append("vocal", file);
+      if (project?.id) form.append("projectId", project.id);
+      if (params.assetId) form.append("vocalAssetId", params.assetId);
+      if (beatAsset?.id) form.append("beatAssetId", beatAsset.id);
+      if (file) form.append("vocal", file);
 
       const [waveformData, res] = await Promise.all([
-        buildWaveform(file).catch(() => null),
+        file ? buildWaveform(file).catch(() => null) : Promise.resolve(null),
         fetch("/api/diagnose-vocal", {
           method: "POST",
           body: form,
+          headers: await authHeaders(),
         }),
       ]);
 
@@ -491,44 +468,87 @@ export default function VocalDiagnosticsPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, []);
+  }, [project]);
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDragOver(false);
-    const file = event.dataTransfer.files[0];
-    if (file) void diagnoseFile(file);
-  };
+  const diagnoseProjectAsset = useCallback(async () => {
+    if (!diagnosticAsset) {
+      setErrorText("Add a vocal or full song in Vocal Diagnostics first.");
+      return;
+    }
 
-  const handleInput = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) void diagnoseFile(file);
-  };
+    if (diagnosticAsset.kind === "full_song") {
+      setErrorText("Using full song audio. Vocal-only diagnostics will be less exact.");
+    }
+
+    try {
+      await diagnoseFile({ assetId: diagnosticAsset.id });
+    } catch (error) {
+      setErrorText(
+        error instanceof Error ? error.message : "Vocal Diagnostics could not load project audio."
+      );
+    }
+  }, [diagnosticAsset, diagnoseFile]);
 
   const statusText = isProcessing ? "Analyzing" : result ? "Complete" : "Ready";
 
   return (
     <ProjectGate>
-      <div className={styles.layout}>
-        <Sidebar
-          activePage="vocal-diagnostics"
-          activeEra={activeEra}
-          onEraChange={handleEraChange}
-          savedCount={0}
-        />
-
-        <main className={styles.contentArea}>
-          <header className={styles.header}>
-            <div>
-              <div className={styles.title}>Vocal Diagnostics</div>
-              <div className={styles.subtitle}>
-                {project?.name ?? "Select a project"} / key, BPM, pitch tune
-              </div>
-            </div>
-            <button className={styles.resetButton} onClick={reset} disabled={!sourceFile && !result}>
+    <div style={{ display: "flex", width: "100%", height: "100%", backgroundColor: "var(--bg)", color: "var(--fg)" }}>
+      <Sidebar activePage="vocal-diagnostics" savedCount={0} />
+      
+      <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minWidth: 0, overflow: "hidden" }}>
+        <header className="globalToolHeader">
+          <div className="globalToolHeaderTitle">
+            <span>Diagnostics</span>
+            <h1>Vocal Check</h1>
+          </div>
+          <div className="globalToolHeaderPickers">
+            <AudioAssetPicker
+              label="Source"
+              value={diagnosticAsset?.id ?? selectedDiagnosticAssetId}
+              onChange={setSelectedDiagnosticAssetId}
+              allowedKinds={["vocal"]}
+              emptyLabel="Vocal"
+              warning="Best results need isolated vocal."
+              disabled={isProcessing}
+              variant="compact"
+            />
+            <AudioAssetPicker
+              label="Beat"
+              value={beatAsset?.id ?? selectedBeatAssetId}
+              onChange={setSelectedBeatAssetId}
+              allowedKinds={["beat"]}
+              emptyLabel="Optional beat"
+              disabled={isProcessing}
+              variant="compact"
+            />
+            <button
+              type="button"
+              className={styles.resetButton}
+              onClick={() => void diagnoseProjectAsset()}
+              disabled={!diagnosticAsset || isProcessing}
+              style={{ marginLeft: 12, height: 32, margin: 0, padding: "0 16px" }}
+            >
+              {isProcessing ? "Analyzing..." : "Analyze"}
+            </button>
+            <button
+              type="button"
+              className={styles.resetButton}
+              onClick={reset}
+              disabled={!sourceFile && !result}
+              style={{ height: 32, margin: 0, padding: "0 16px" }}
+            >
               Reset
             </button>
-          </header>
+          </div>
+        </header>
+
+      <ToolLockedOverlay
+        key={project ? `${project.id}:vocal-diagnostics` : "vocal-diagnostics"}
+        locked={!diagnosticAsset}
+        className={styles.contentArea}
+        momentKey={project ? `${project.id}:vocal-diagnostics` : "vocal-diagnostics"}
+      >
 
           <div className={styles.divider} />
 
@@ -555,26 +575,12 @@ export default function VocalDiagnosticsPage() {
 
           <section className={result ? styles.workspace : styles.centerCanvas}>
             {!sourceFile && !result && !isProcessing && (
-              <div
-                className={`${styles.uploadZone} ${dragOver ? styles.uploadZoneActive : ""}`}
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                role="button"
-                tabIndex={0}
-                aria-label="Upload a raw vocal"
-              >
-                <AnimatedDashedBorder />
-                <UploadArrowIcon className={styles.uploadIcon} />
-                <span className={styles.uploadPrimary}>Drop a raw vocal</span>
-                <span className={styles.uploadSecondary}>
-                  .wav or .mp3 / key, BPM, pitch tune
-                </span>
-                {errorText && <span className={styles.uploadError}>{errorText}</span>}
+              <div className={styles.failurePanel} aria-live="polite">
+                <div className={styles.failureTitle}>No diagnostic run yet</div>
+                <div className={styles.failureText}>
+                  Choose or upload project audio above, then analyze it here.
+                </div>
+                {errorText && <div className={styles.failureText}>{errorText}</div>}
               </div>
             )}
 
@@ -584,8 +590,8 @@ export default function VocalDiagnosticsPage() {
               <div className={styles.failurePanel} aria-live="polite">
                 <div className={styles.failureTitle}>Diagnostics failed</div>
                 <div className={styles.failureText}>{errorText}</div>
-                <button className={styles.retryButton} onClick={() => fileInputRef.current?.click()}>
-                  Try another vocal
+                <button className={styles.retryButton} onClick={() => void diagnoseProjectAsset()}>
+                  Retry selected asset
                 </button>
               </div>
             )}
@@ -596,14 +602,6 @@ export default function VocalDiagnosticsPage() {
                 <SettingsPanel result={result} />
               </>
             )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              className={styles.hiddenInput}
-              onChange={handleInput}
-            />
           </section>
 
           <footer className={styles.transport} aria-label="Vocal diagnostics transport">
@@ -619,10 +617,10 @@ export default function VocalDiagnosticsPage() {
               <span>{result ? `${result.detectedKey} / ${Math.round(result.bpm)} BPM` : "Librosa"}</span>
             </div>
           </footer>
-        </main>
-
-        <MobileTabBar activePage="vocal-diagnostics" />
+      </ToolLockedOverlay>
       </div>
+      <MobileTabBar activePage="vocal-diagnostics" />
+    </div>
     </ProjectGate>
   );
 }

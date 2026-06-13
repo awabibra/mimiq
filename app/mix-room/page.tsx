@@ -6,15 +6,24 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import GateScreen from "@/components/GateScreen";
+import { MobileTabBar } from "@/components/MobileTabBar";
 import { Sidebar } from "@/components/Sidebar";
 import { ProjectGate } from "@/components/ProjectGate";
+import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
+import { AudioAssetPicker } from "@/components/AudioAssetPicker";
+
+import { authHeaders } from "@/lib/apiAuth";
 import { useStore } from "@/lib/store";
-import { useAudioStore } from "@/lib/useAudioStore";
-import { downloadProjectAudio, saveProjectPatch } from "@/lib/projects";
+import { saveProjectPatch } from "@/lib/projects";
+import {
+  getFullSongAsset,
+  getPrimaryBeatAsset,
+  getPrimaryVocalAsset,
+  getProjectAudioAssets,
+  resolveAssetFile,
+} from "@/lib/projectAudio";
 import {
   appendMixRoomEQCut,
   getCurrentVocal,
@@ -30,11 +39,14 @@ import type {
 } from "@/lib/types";
 import styles from "./page.module.css";
 
+const MIX_ROOM_UPLOAD_MAX_SIZE = 50 * 1024 * 1024;
+
 const FFT_SIZE = 4096;
 const MIN_FREQ = 20;
 const MAX_FREQ = 20000;
 const MIN_DB = -80;
 const MAX_DB = 0;
+const EXPIRED_FILE_ACCESS_MESSAGE = "File access expired, please re-upload.";
 
 interface CurvePoint {
   f: number;
@@ -44,6 +56,18 @@ interface CurvePoint {
 interface SpectrumState {
   vocal: SpectralData;
   beat: SpectralData;
+}
+
+type AudioTrackKind = "vocal" | "beat";
+type AudioSourceOrigin = "session-file" | "project" | "audio-store" | "expired" | "missing";
+
+interface AudioSourceDescriptor {
+  kind: AudioTrackKind;
+  file: File | null;
+  source: string | null;
+  playbackUrl: string | null;
+  origin: AudioSourceOrigin;
+  expired: boolean;
 }
 
 interface HoverState {
@@ -287,13 +311,147 @@ function generatePath(points: CurvePoint[], isFill: boolean) {
   return commands.join(" ");
 }
 
+function isNonDurableAudioUrl(value: unknown) {
+  return (
+    typeof value === "string" &&
+    (value.startsWith("blob:") ||
+      value.startsWith("data:") ||
+      value.startsWith("filesystem:"))
+  );
+}
+
+function isDurableAudioUrl(value: unknown) {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !isNonDurableAudioUrl(value)
+  );
+}
+
+function isRemoteAudioUrl(source: string | null) {
+  return Boolean(
+    source && (source.startsWith("http://") || source.startsWith("https://"))
+  );
+}
+
+function getAudioUrlKind(source: string | null) {
+  if (!source) return "missing";
+  if (source.startsWith("blob:")) return "blob URL";
+  if (source.startsWith("data:")) return "data URL";
+  if (source.startsWith("filesystem:")) return "filesystem URL";
+  if (source.startsWith("http://") || source.startsWith("https://")) {
+    return "remote URL";
+  }
+
+  return "storage URL/path";
+}
+
+function getAudioCandidateKind(value: unknown) {
+  if (value === null || value === undefined) return "missing";
+  if (typeof value !== "string") return "relative";
+  const trimmed = value.trim();
+  if (!trimmed) return "empty";
+  if (trimmed.startsWith("blob:")) return "blob";
+  if (trimmed.startsWith("data:")) return "data";
+  if (trimmed.startsWith("filesystem:")) return "filesystem";
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return "http";
+  }
+  if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+    return "relative";
+  }
+
+  return "storage-path";
+}
+
+function summarizeAudioCandidate(field: string, value: unknown) {
+  const stringValue = typeof value === "string" ? value : "";
+
+  return {
+    field,
+    present: typeof value === "string" ? stringValue.trim().length > 0 : Boolean(value),
+    urlKind: getAudioCandidateKind(value),
+    shortPrefix: stringValue.slice(0, 24),
+    isNonDurableAudioUrl: isNonDurableAudioUrl(value),
+  };
+}
+
+function describeAudioSource(source: AudioSourceDescriptor) {
+  return {
+    kind: source.kind,
+    origin: source.origin,
+    urlKind: getAudioUrlKind(source.source),
+    hasFile: Boolean(source.file),
+    filename: source.file?.name ?? null,
+    expired: source.expired,
+  };
+}
+
+function pickAudioSource(params: {
+  kind: AudioTrackKind;
+  localFile: File | null;
+  localObjectUrl: string | null;
+  projectSource: string | null | undefined;
+  storeSource: string | null | undefined;
+}): AudioSourceDescriptor {
+  if (params.localFile) {
+    return {
+      kind: params.kind,
+      file: params.localFile,
+      source: params.localObjectUrl,
+      playbackUrl: params.localObjectUrl,
+      origin: "session-file",
+      expired: false,
+    };
+  }
+
+  const projectExpired = isNonDurableAudioUrl(params.projectSource);
+  const storeExpired = isNonDurableAudioUrl(params.storeSource);
+
+	  if (isDurableAudioUrl(params.projectSource)) {
+      const projectSource = params.projectSource ?? null;
+	    return {
+	      kind: params.kind,
+	      file: null,
+	      source: projectSource,
+	      playbackUrl: isRemoteAudioUrl(projectSource)
+	        ? projectSource
+	        : null,
+	      origin: "project",
+	      expired: false,
+    };
+  }
+
+	  if (isDurableAudioUrl(params.storeSource)) {
+      const storeSource = params.storeSource ?? null;
+	    return {
+	      kind: params.kind,
+	      file: null,
+	      source: storeSource,
+	      playbackUrl: isRemoteAudioUrl(storeSource)
+	        ? storeSource
+	        : null,
+	      origin: "audio-store",
+      expired: false,
+    };
+  }
+
+  return {
+    kind: params.kind,
+    file: null,
+    source: null,
+    playbackUrl: null,
+    origin: projectExpired || storeExpired ? "expired" : "missing",
+    expired: projectExpired || storeExpired,
+  };
+}
+
 async function loadAudioFile(source: string, filename: string) {
-  if (
-    source.startsWith("blob:") ||
-    source.startsWith("data:") ||
-    source.startsWith("http://") ||
-    source.startsWith("https://")
-  ) {
+  if (isNonDurableAudioUrl(source)) {
+    throw new Error(EXPIRED_FILE_ACCESS_MESSAGE);
+  }
+
+  if (isRemoteAudioUrl(source)) {
     const res = await fetch(source);
     const blob = await res.blob();
     return new File([blob], filename, {
@@ -301,7 +459,7 @@ async function loadAudioFile(source: string, filename: string) {
     });
   }
 
-  return downloadProjectAudio(source, filename);
+  throw new Error(`Project audio asset is missing for ${filename}.`);
 }
 
 function scoreTone(score: number) {
@@ -316,16 +474,6 @@ function scoreGlow(score: number) {
   return "0 0 16px rgba(245,166,35,0.28)";
 }
 
-function isBrowserPlayableUrl(source: string | null) {
-  if (!source) return false;
-  return (
-    source.startsWith("blob:") ||
-    source.startsWith("data:") ||
-    source.startsWith("http://") ||
-    source.startsWith("https://")
-  );
-}
-
 type MixRoomViewMode = "frequency" | "timeline";
 
 interface MixRoomApiResponse {
@@ -337,14 +485,6 @@ interface MixRoomApiResponse {
   fallback_used?: boolean;
   fallback_reason?: string | null;
 }
-
-const isAcceptedAudioFile = (file: File) => {
-  const name = file.name.toLowerCase();
-  return name.endsWith(".wav") || name.endsWith(".mp3");
-};
-
-const shortFileName = (name: string) =>
-  name.length > 28 ? `${name.slice(0, 25)}...` : name;
 
 async function resolveAudioFile(
   localFile: File | null,
@@ -471,22 +611,36 @@ function MixRoomTransport({
 export default function MixRoomPage() {
   const { daw, era: storeEra, setEra } = useStore();
   const activeEra = eras.find((e) => e.id === storeEra) || defaultEra;
-  const { vocalFileUrl, beatFileUrl } = useAudioStore();
   const project = useProject((state) => state.project);
   const setActiveProject = useProject((state) => state.setActiveProject);
   const updateProject = useProject((state) => state.updateProject);
   const addMixRoomEQCut = useProject((state) => state.addMixRoomEQCut);
   const projectVocal = getCurrentVocal(project);
+  const projectAudioAssets = getProjectAudioAssets(project);
+  const [selectedVocalAssetId, setSelectedVocalAssetId] = useState<string | null>(null);
+  const [selectedBeatAssetId, setSelectedBeatAssetId] = useState<string | null>(null);
+  const [selectedFullSongAssetId, setSelectedFullSongAssetId] = useState<string | null>(null);
+  const vocalAsset =
+    projectAudioAssets.find((asset) => asset.id === selectedVocalAssetId) ??
+    getPrimaryVocalAsset(project);
+  const beatAsset =
+    projectAudioAssets.find((asset) => asset.id === selectedBeatAssetId) ??
+    getPrimaryBeatAsset(project);
+  const fullSongAsset =
+    projectAudioAssets.find((asset) => asset.id === selectedFullSongAssetId) ??
+    getFullSongAsset(project);
+  const fullSongMode = Boolean(fullSongAsset && (!vocalAsset || !beatAsset));
+  const isMixRoomUnlocked = Boolean((vocalAsset && beatAsset) || fullSongAsset);
   const projectId = project?.id;
   const dawName = daw || "Logic Pro";
   const savedReport = isMixRoomReport(project?.mix_room_report)
     ? project?.mix_room_report
     : null;
 
-  const [localVocalFile, setLocalVocalFile] = useState<File | null>(null);
-  const [localBeatFile, setLocalBeatFile] = useState<File | null>(null);
-  const [localVocalUrl, setLocalVocalUrl] = useState<string | null>(null);
-  const [localBeatUrl, setLocalBeatUrl] = useState<string | null>(null);
+  const [localVocalFile] = useState<File | null>(null);
+  const [localBeatFile] = useState<File | null>(null);
+  const [localVocalUrl] = useState<string | null>(null);
+  const [localBeatUrl] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<MixRoomViewMode>("frequency");
   const [vizVisible, setVizVisible] = useState(false);
   const [beatDrawn, setBeatDrawn] = useState(false);
@@ -502,22 +656,86 @@ export default function MixRoomPage() {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [savingZone, setSavingZone] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
+  const selectUploadedAsset = useCallback((asset: { id: string; kind: string }) => {
+    if (asset.kind === "vocal") setSelectedVocalAssetId(asset.id);
+    if (asset.kind === "beat") setSelectedBeatAssetId(asset.id);
+    if (asset.kind === "full_song") setSelectedFullSongAssetId(asset.id);
+  }, [setSelectedBeatAssetId, setSelectedFullSongAssetId, setSelectedVocalAssetId]);
 
-  const vocalSource = localVocalUrl ?? projectVocal?.url ?? vocalFileUrl;
-  const beatSource = localBeatUrl ?? project?.beat_file_url ?? beatFileUrl;
+  useEffect(() => {
+    console.info("[mix-room audio candidates]", {
+      vocal: {
+        localVocalUrl: summarizeAudioCandidate("localVocalUrl", localVocalUrl),
+        projectVocalUrl: summarizeAudioCandidate(
+          "projectVocalUrl",
+          projectVocal?.url
+        ),
+	        projectVocalAsset: summarizeAudioCandidate(
+	          "projectVocalAsset",
+	          vocalAsset?.storagePath
+	        ),
+      },
+      beat: {
+        localBeatUrl: summarizeAudioCandidate("localBeatUrl", localBeatUrl),
+        projectBeatFileUrl: summarizeAudioCandidate(
+          "projectBeatFileUrl",
+          project?.beat_file_url
+        ),
+	        projectBeatAsset: summarizeAudioCandidate(
+	          "projectBeatAsset",
+	          beatAsset?.storagePath
+	        ),
+	      },
+	    });
+	  }, [
+	    beatAsset?.storagePath,
+	    localBeatUrl,
+	    localVocalUrl,
+	    project?.beat_file_url,
+	    projectVocal?.url,
+	    vocalAsset?.storagePath,
+	  ]);
+
+  const vocalAudioSource = useMemo(
+    () =>
+      pickAudioSource({
+        kind: "vocal",
+        localFile: localVocalFile,
+        localObjectUrl: localVocalUrl,
+	        projectSource: vocalAsset?.storagePath ?? (fullSongMode ? fullSongAsset?.storagePath : null),
+	        storeSource: null,
+	      }),
+	    [fullSongAsset?.storagePath, fullSongMode, localVocalFile, localVocalUrl, vocalAsset?.storagePath]
+	  );
+  const beatAudioSource = useMemo(
+    () =>
+      pickAudioSource({
+        kind: "beat",
+        localFile: localBeatFile,
+        localObjectUrl: localBeatUrl,
+	        projectSource: beatAsset?.storagePath ?? (fullSongMode ? fullSongAsset?.storagePath : null),
+	        storeSource: null,
+	      }),
+	    [beatAsset?.storagePath, fullSongAsset?.storagePath, fullSongMode, localBeatFile, localBeatUrl]
+	  );
+  const vocalSource = vocalAudioSource.source;
+  const beatSource = beatAudioSource.source;
   const vocalFilename =
-    localVocalFile?.name ?? projectVocal?.filename ?? "project-vocal.wav";
+	    localVocalFile?.name ?? vocalAsset?.filename ?? fullSongAsset?.filename ?? "project-vocal.wav";
   const beatFilename =
-    localBeatFile?.name ?? project?.beat_filename ?? "project-beat.wav";
-  const hasBeat = !!beatSource;
-  const hasVocal = !!vocalSource;
+	    localBeatFile?.name ?? beatAsset?.filename ?? fullSongAsset?.filename ?? "project-beat.wav";
+  const hasBeat = Boolean(beatAudioSource.file || beatSource);
+  const hasVocal = Boolean(vocalAudioSource.file || vocalSource);
+	  const hasExpiredAudioAccess = vocalAudioSource.expired || beatAudioSource.expired;
   const missingPrompt =
-    !hasVocal && !hasBeat
-      ? "Upload a vocal and a beat to see where they fight for space."
+    hasExpiredAudioAccess
+	      ? EXPIRED_FILE_ACCESS_MESSAGE
+	      : !hasVocal && !hasBeat
+	      ? "Add project audio in Mix Room to see where it needs space."
       : !hasVocal
         ? "Vocal missing. Upload the vocal you want to fit into this beat."
         : !hasBeat
-          ? "Beat missing. Upload the instrumental so MimiQ can compare it with the vocal."
+          ? "Beat missing. Upload the instrumental so mimiq can compare it with the vocal."
           : null;
   const collisions = report?.collisions ?? [];
   const pockets = report?.pockets ?? [];
@@ -528,8 +746,9 @@ export default function MixRoomPage() {
     () => buildCurve(spectrum?.vocal ?? null),
     [spectrum]
   );
-  const sourceUrl = vocalSource ?? beatSource ?? null;
-  const playbackUrl = isBrowserPlayableUrl(sourceUrl) ? sourceUrl : null;
+  const sourceUrl = vocalAudioSource.source ?? beatAudioSource.source ?? null;
+  const playbackUrl =
+    vocalAudioSource.playbackUrl ?? beatAudioSource.playbackUrl ?? null;
   const transportTrackName =
     projectVocal?.label ?? project?.name ?? "Lead Vocal";
   const transportSourceLabel = playbackUrl
@@ -538,9 +757,18 @@ export default function MixRoomPage() {
       : "beat source monitor"
     : sourceUrl
       ? "project source stored"
-      : "waiting for Sandbox audio";
+	      : fullSongMode
+	        ? "full song source"
+	        : "waiting for project audio";
   const matchScore = report?.matchScore ?? null;
   const metricStatus = isLoading ? "Scanning" : report ? "Ready" : "Waiting";
+
+  useEffect(() => {
+	    console.info("[mix-room audio]", {
+	      vocal: describeAudioSource(vocalAudioSource),
+	      beat: describeAudioSource(beatAudioSource),
+	    });
+	  }, [beatAudioSource, vocalAudioSource]);
 
   useEffect(() => {
     const t1 = setTimeout(() => setVizVisible(true), 100);
@@ -607,112 +835,74 @@ export default function MixRoomPage() {
     [projectId, setActiveProject, updateProject]
   );
 
-  const handleAudioUpload = useCallback(
-    (kind: "vocal" | "beat", event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0] ?? null;
-      event.currentTarget.value = "";
-      if (!file) return;
-
-      if (!isAcceptedAudioFile(file)) {
-        setErrorText("Upload a WAV or MP3 file for Mix Room.");
-        return;
-      }
-
-      const nextUrl = URL.createObjectURL(file);
-      if (kind === "vocal") {
-        setLocalVocalFile(file);
-        setLocalVocalUrl((previous) => {
-          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
-          return nextUrl;
-        });
-      } else {
-        setLocalBeatFile(file);
-        setLocalBeatUrl((previous) => {
-          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
-          return nextUrl;
-        });
-      }
-
-      setSpectrum(null);
-      setReport(null);
-      setConfirmation(null);
-      setErrorText(null);
-      setStatusText(
-        kind === "vocal"
-          ? "Vocal loaded. Add the beat to run Mix Room."
-          : "Beat loaded. Add the vocal to run Mix Room."
-      );
-    },
-    []
-  );
-
-  useEffect(
-    () => () => {
-      if (localVocalUrl?.startsWith("blob:")) URL.revokeObjectURL(localVocalUrl);
-    },
-    [localVocalUrl]
-  );
-
-  useEffect(
-    () => () => {
-      if (localBeatUrl?.startsWith("blob:")) URL.revokeObjectURL(localBeatUrl);
-    },
-    [localBeatUrl]
-  );
-
-  useEffect(() => {
+  const handleRunAnalysis = useCallback(async () => {
     if (!vocalSource || !beatSource) {
-      const frame = requestAnimationFrame(() => {
-        setIsLoading(false);
-        setSpectrum(null);
-        setStatusText(missingPrompt ?? "Waiting for both audio files...");
-      });
-
-      return () => cancelAnimationFrame(frame);
+      setIsLoading(false);
+      setSpectrum(null);
+      setStatusText(missingPrompt ?? "Waiting for both audio files...");
+      return;
     }
 
-    let cancelled = false;
-    const currentVocalSource = vocalSource;
-    const currentBeatSource = beatSource;
-    const currentVocalFile = localVocalFile;
-    const currentBeatFile = localBeatFile;
-
-    async function runAnalysis() {
-      setIsLoading(true);
-      setErrorText(null);
-      setStatusText("Loading vocal and beat...");
+    setIsLoading(true);
+    setErrorText(null);
+    setStatusText("Loading vocal and beat...");
 
       try {
-        const [vocalFile, beatFile] = await Promise.all([
-          resolveAudioFile(currentVocalFile, currentVocalSource, vocalFilename),
-          resolveAudioFile(currentBeatFile, currentBeatSource, beatFilename),
+        const currentVocalAsset = vocalAsset ?? (fullSongMode ? fullSongAsset : null);
+        const currentBeatAsset = beatAsset ?? (fullSongMode ? fullSongAsset : null);
+        let vocalFile: File | null = null;
+        let beatFile: File | null = null;
+        let vocalSpectrum: SpectralData | null = null;
+        let beatSpectrum: SpectralData | null = null;
+
+        // Always resolve files and run browser FFT so the analysis never
+        // depends on the audio service being online. Asset IDs are still
+        // sent to the server for its own resolution context.
+        setStatusText("Downloading audio files...");
+        [vocalFile, beatFile] = await Promise.all([
+          vocalAudioSource.file
+            ? Promise.resolve(vocalAudioSource.file)
+            : currentVocalAsset
+              ? resolveAssetFile(currentVocalAsset)
+              : resolveAudioFile(null, vocalSource, vocalFilename),
+          beatAudioSource.file
+            ? Promise.resolve(beatAudioSource.file)
+            : currentBeatAsset
+              ? resolveAssetFile(currentBeatAsset)
+              : resolveAudioFile(null, beatSource, beatFilename),
         ]);
 
-        if (cancelled) return;
+        if (!vocalFile || !beatFile) {
+          throw new Error("Could not load audio files. Check that the uploads completed.");
+        }
+
         setStatusText("Reading frequency balance...");
 
-        const [vocalSpectrum, beatSpectrum] = await Promise.all([
+        [vocalSpectrum, beatSpectrum] = await Promise.all([
           analyzeSpectrum(vocalFile),
           analyzeSpectrum(beatFile),
         ]);
 
-        if (cancelled) return;
         setStatusText("Sending both files to Mix Room...");
 
         const form = new FormData();
+        if (projectId) form.append("projectId", projectId);
         form.append("vocalFile", vocalFile);
         form.append("beatFile", beatFile);
         form.append("genre", activeEra.name);
         form.append("daw", dawName);
-        form.append("vocalSource", currentVocalSource ?? `upload:${vocalFile.name}`);
-        form.append("beatSource", currentBeatSource ?? `upload:${beatFile.name}`);
-        if (projectVocal?.id) form.append("vocalVersionId", projectVocal.id);
-        form.append("vocalSpectrum", JSON.stringify(vocalSpectrum));
-        form.append("beatSpectrum", JSON.stringify(beatSpectrum));
+        form.append("vocalSource", vocalSource ?? `upload:${vocalFile?.name ?? "asset"}`);
+        form.append("beatSource", beatSource ?? `upload:${beatFile?.name ?? "asset"}`);
+        if (vocalAsset?.id) form.append("vocalAssetId", vocalAsset.id);
+        if (beatAsset?.id) form.append("beatAssetId", beatAsset.id);
+        if (fullSongMode && fullSongAsset?.id) form.append("fullSongAssetId", fullSongAsset.id);
+        if (vocalSpectrum) form.append("vocalSpectrum", JSON.stringify(vocalSpectrum));
+        if (beatSpectrum) form.append("beatSpectrum", JSON.stringify(beatSpectrum));
 
         const analysisRes = await fetch("/api/mix-room", {
           method: "POST",
           body: form,
+          headers: await authHeaders(),
         });
 
         const analysisData = (await analysisRes.json()) as MixRoomApiResponse;
@@ -722,8 +912,6 @@ export default function MixRoomPage() {
               "Mix Room could not analyze the vocal and beat together."
           );
         }
-
-        if (cancelled) return;
 
         const existingCuts = getMixRoomEQCuts(
           useProject.getState().project?.mix_room_report ?? null
@@ -745,36 +933,33 @@ export default function MixRoomPage() {
         );
       } catch (error) {
         console.error(error);
-        if (!cancelled) {
-          setErrorText(
-            error instanceof Error
-              ? error.message
-              : "Mix Room could not read both files yet."
-          );
-          setStatusText("Analysis paused.");
-        }
+        setErrorText(
+          error instanceof Error
+            ? error.message
+            : "Mix Room could not read both files yet."
+        );
+        setStatusText("Analysis paused.");
       } finally {
-        if (!cancelled) setIsLoading(false);
+        setIsLoading(false);
       }
-    }
-
-    void runAnalysis();
-
-    return () => {
-      cancelled = true;
-    };
   }, [
-    activeEra.name,
-    beatFilename,
-    beatSource,
-    dawName,
-    localBeatFile,
-    localVocalFile,
+	    activeEra.name,
+      beatAsset,
+	    beatFilename,
+	    beatSource,
+	    dawName,
+      fullSongAsset,
+      fullSongMode,
+	    localBeatFile,
+	    localVocalFile,
     missingPrompt,
     projectId,
     projectVocal?.id,
     saveReport,
-    vocalFilename,
+    beatAudioSource.file,
+	    vocalAudioSource.file,
+      vocalAsset,
+	    vocalFilename,
     vocalSource,
   ]);
 
@@ -918,15 +1103,6 @@ export default function MixRoomPage() {
       label: "Pocket",
     })),
   ].sort((a, b) => a.centerFreq - b.centerFreq);
-  const vocalUploadLabel =
-    localVocalFile?.name ??
-    projectVocal?.filename ??
-    (vocalSource ? "Project vocal loaded" : null);
-  const beatUploadLabel =
-    localBeatFile?.name ??
-    project?.beat_filename ??
-    (beatSource ? "Project beat loaded" : null);
-
   return (
     <ProjectGate>
       <div className={styles.layout}>
@@ -942,12 +1118,57 @@ export default function MixRoomPage() {
         />
         <Sidebar
           activePage="mix-room"
-          activeEra={activeEra}
-          onEraChange={(era) => setEra(era.id)}
           savedCount={0}
         />
-        <GateScreen>
-          <div className={styles.contentArea}>
+        <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minWidth: 0, overflow: "hidden" }}>
+          <header className="globalToolHeader">
+            <div className="globalToolHeaderTitle">
+              <span>Spectrum</span>
+              <h1>Collision Check</h1>
+            </div>
+            <div className="globalToolHeaderPickers">
+                <AudioAssetPicker
+                  label="Vocal"
+                  value={vocalAsset?.id ?? selectedVocalAssetId}
+                  onChange={setSelectedVocalAssetId}
+                  allowedKinds={["vocal"]}
+                  emptyLabel="No vocal"
+                  variant="compact"
+                />
+                <AudioAssetPicker
+                  label="Beat"
+                  value={beatAsset?.id ?? selectedBeatAssetId}
+                  onChange={setSelectedBeatAssetId}
+                  allowedKinds={["beat"]}
+                  emptyLabel="No beat"
+                  variant="compact"
+                />
+                <div style={{ color: "var(--fg-muted)", fontSize: 13 }}>OR</div>
+                <AudioAssetPicker
+                  label="Song"
+                  value={fullSongAsset?.id ?? selectedFullSongAssetId}
+                  onChange={setSelectedFullSongAssetId}
+                  allowedKinds={["full_song"]}
+                  emptyLabel="No song"
+                  variant="compact"
+                />
+                <button
+                  type="button"
+                  className={styles.resetButton}
+                  onClick={() => void handleRunAnalysis()}
+                  disabled={isLoading || (!vocalSource && !beatSource && !fullSongMode)}
+                  style={{ marginLeft: 12, height: 32, margin: 0, padding: "0 16px" }}
+                >
+                  {isLoading ? "Analyzing..." : "Analyze"}
+                </button>
+            </div>
+          </header>
+        <ToolLockedOverlay
+          key={project ? `${project.id}:mix-room` : "mix-room"}
+          locked={!isMixRoomUnlocked}
+          className={styles.contentArea}
+          momentKey={project ? `${project.id}:mix-room` : "mix-room"}
+        >
             <section className={styles.metricsBar} aria-label="Mix Room metrics">
               <div className={styles.metricCell}>
                 <span className={styles.metricIcon} aria-hidden="true">
@@ -989,6 +1210,7 @@ export default function MixRoomPage() {
                   </strong>
                 </div>
               </div>
+
               <div className={styles.segmentedControl}>
                 <button
                   type="button"
@@ -1281,7 +1503,7 @@ export default function MixRoomPage() {
                     <div className={styles.explanationText}>
                       {report?.explanation ||
                         (isLoading
-                          ? "MimiQ is comparing the vocal and beat so it can explain the strongest fight spot."
+                          ? "mimiq is comparing the vocal and beat so it can explain the strongest fight spot."
                           : missingPrompt ??
                             "Run Mix Room with a vocal and beat to get a plain-English move.")}
                     </div>
@@ -1290,42 +1512,6 @@ export default function MixRoomPage() {
               </div>
 
               <div className={styles.rightColumn}>
-                <div className={styles.uploadPanel}>
-                  <label
-                    className={`${styles.mixUploadSlot} ${
-                      hasVocal ? styles.mixUploadSlotReady : ""
-                    }`}
-                  >
-                    <input
-                      type="file"
-                      accept=".wav,.mp3"
-                      onChange={(event) => handleAudioUpload("vocal", event)}
-                    />
-                    <span className={styles.mixUploadKicker}>Vocal</span>
-                    <strong>
-                      {vocalUploadLabel
-                        ? shortFileName(vocalUploadLabel)
-                        : "Upload vocal"}
-                    </strong>
-                    <em>{hasVocal ? "Ready" : "Required before analysis"}</em>
-                  </label>
-                  <label
-                    className={`${styles.mixUploadSlot} ${
-                      hasBeat ? styles.mixUploadSlotReady : ""
-                    }`}
-                  >
-                    <input
-                      type="file"
-                      accept=".wav,.mp3"
-                      onChange={(event) => handleAudioUpload("beat", event)}
-                    />
-                    <span className={styles.mixUploadKicker}>Beat</span>
-                    <strong>
-                      {beatUploadLabel ? shortFileName(beatUploadLabel) : "Upload beat"}
-                    </strong>
-                    <em>{hasBeat ? "Ready" : "Required before analysis"}</em>
-                  </label>
-                </div>
                 <div className={styles.reportHeader}>
                   <span>Collision Report</span>
                   {report && (
@@ -1385,8 +1571,9 @@ export default function MixRoomPage() {
               statusText={statusText}
               matchScore={matchScore}
             />
-          </div>
-        </GateScreen>
+        </ToolLockedOverlay>
+        </div>
+        <MobileTabBar activePage="mix-room" />
       </div>
     </ProjectGate>
   );

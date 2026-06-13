@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
           fontFamily: "sans-serif",
         }}
       >
-        {/* Top row: MimiQ wordmark + Era pill */}
+        {/* Top row: mimiq wordmark + Era pill */}
         <div
           style={{
             display: "flex",
@@ -82,11 +82,21 @@ export async function GET(request: NextRequest) {
             style={{
               display: "flex",
               fontSize: "32px",
-              fontWeight: 600,
+              fontWeight: 800,
+              letterSpacing: "-0.05em",
               color: "#F2F2F0",
             }}
           >
-            MimiQ
+            mimi
+            <span
+              style={{
+                color: "#d7ff3f",
+                marginLeft: "1px",
+                transform: "translateY(2px)"
+              }}
+            >
+              q
+            </span>
           </div>
 
           {/* Era pill */}

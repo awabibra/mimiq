@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthModal } from "@/components/AuthModal";
 import styles from "./LandingTopBar.module.css";
+import { Logo } from "@/components/ui/logo";
 
 export function LandingTopBar() {
   const router = useRouter();
@@ -12,7 +13,7 @@ export function LandingTopBar() {
   return (
     <>
       <header className={styles.bar}>
-        <span className={styles.wordmark}>MimiQ</span>
+        <Logo className={styles.wordmark} />
         <button
           type="button"
           className={styles.signIn}

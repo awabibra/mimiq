@@ -1,31 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { AnimatePresence, motion } from "framer-motion";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type DragEvent,
-} from "react";
-import { eras, type Era } from "@/lib/eras";
+import { useEffect, useState } from "react";
+import { getProjectAudioAssets } from "@/lib/projectAudio";
 import { useAuth } from "@/lib/useAuth";
-import { useAudioStore } from "@/lib/useAudioStore";
 import { useProject } from "@/lib/useProject";
+import { ProjectAudioUploadWidget } from "@/components/ProjectAudioUpload";
+import { Logo } from "@/components/ui/logo";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
-  activePage: "projects" | "sandbox" | "mix-room" | "level-lab" | "vault";
-  activeEra: Era;
-  onEraChange: (era: Era) => void;
+  activePage: "projects" | "sandbox" | "mix-room" | "level-lab" | "stem-splitter" | "vocal-diagnostics" | "vault";
   savedCount: number;
   dimNavItems?: boolean;
-  uploadedVocalName?: string | null;
-  onVocalUpload?: (file: File) => void | Promise<void>;
-  onVocalClear?: () => void;
 }
 
+// ... skipping icons for brevity ...
 function SlidersIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -68,11 +58,25 @@ function LayersIcon({ className }: { className?: string }) {
   );
 }
 
-function LockIcon({ className }: { className?: string }) {
+function SplitIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="11" width="14" height="10" rx="2" ry="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 6h4a4 4 0 0 1 4 4v4a4 4 0 0 0 4 4h4" />
+      <path d="M16 14l4 4-4 4" />
+      <path d="M4 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 4-4h4" />
+      <path d="M16 2l4 4-4 4" />
+    </svg>
+  );
+}
+
+function TuneIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v13" />
+      <path d="M16 7l-4-4-4 4" />
+      <circle cx="12" cy="18" r="3" />
+      <path d="M4 12h3" />
+      <path d="M17 12h3" />
     </svg>
   );
 }
@@ -104,157 +108,34 @@ function SettingsIcon({ className }: { className?: string }) {
   );
 }
 
-function UploadWaveIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 10V8" />
-      <path d="M5 12V5" />
-      <path d="M8 13V3" />
-      <path d="M11 12V5" />
-      <path d="M14 10V8" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M13 4.5 6.5 11 3 7.5" />
-    </svg>
-  );
-}
-
-const isAcceptedVocalFile = (file: File) => {
-  const name = file.name.toLowerCase();
-  return name.endsWith(".wav") || name.endsWith(".mp3");
-};
-
-const truncateFileName = (name: string) =>
-  name.length > 18 ? `${name.slice(0, 15)}...` : name;
-
 export function Sidebar({
   activePage,
-  activeEra,
-  onEraChange,
   savedCount,
   dimNavItems = false,
-  uploadedVocalName = null,
-  onVocalUpload,
-  onVocalClear,
 }: SidebarProps) {
   const [isHydrated, setIsHydrated] = useState(false);
-  const [unlockStage, setUnlockStage] = useState(0);
-  const [uploadDragOver, setUploadDragOver] = useState(false);
-  const [uploadRejected, setUploadRejected] = useState(false);
-  const uploadInputRef = useRef<HTMLInputElement>(null);
-  const rejectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const storeIsAnalyzed = useAudioStore((state) => state.isAnalyzed);
-  const isAnalyzed = isHydrated ? storeIsAnalyzed : false;
-  const activeProjectName = useProject((state) => state.project?.name);
+  const project = useProject((state) => state.project);
+  const activeProjectName = project?.name;
   const signOut = useAuth((state) => state.signOut);
+  const audioAssets = getProjectAudioAssets(project);
+  const readyAssets = audioAssets.filter((asset) => asset.status === "ready");
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => setIsHydrated(true));
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  useEffect(
-    () => () => {
-      if (rejectTimerRef.current) {
-        clearTimeout(rejectTimerRef.current);
-      }
-    },
-    []
-  );
-
-  // Trigger staggered animations via state stages when isAnalyzed flips to true
-  useEffect(() => {
-    if (!isHydrated) return;
-    let frame: number;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    
-    if (isAnalyzed) {
-      // Small tick to ensure class flips after render if it mounted already analyzed
-      frame = requestAnimationFrame(() => {
-        setUnlockStage(1); // Mix Room unlocks
-        timer = setTimeout(() => setUnlockStage(2), 100); // Level Lab unlocks
-      });
-      return () => {
-        cancelAnimationFrame(frame);
-        if (timer) clearTimeout(timer);
-      };
-    } else {
-      frame = requestAnimationFrame(() => setUnlockStage(0));
-      return () => cancelAnimationFrame(frame);
-    }
-  }, [isAnalyzed, isHydrated]);
-
-  // Prevent rendering un-hydrated lock states completely (avoids flicker)
   if (!isHydrated) {
     return <aside className={styles.sidebar}></aside>;
   }
 
-  const isMixRoomUnlocked = unlockStage >= 1;
-  const isLevelLabUnlocked = unlockStage >= 2;
-  const showGreenDot = unlockStage >= 1; // Unlocks immediately with Mix Room
-  const showSidebarUpload = Boolean(onVocalUpload) && activePage !== "level-lab";
-  const displayVocalName = uploadedVocalName
-    ? truncateFileName(uploadedVocalName)
-    : null;
-
-  const flashRejectedUpload = () => {
-    if (rejectTimerRef.current) {
-      clearTimeout(rejectTimerRef.current);
-    }
-    setUploadRejected(true);
-    rejectTimerRef.current = setTimeout(() => {
-      setUploadRejected(false);
-      rejectTimerRef.current = null;
-    }, 300);
-  };
-
-  const handleSidebarVocalFile = (file: File) => {
-    if (!isAcceptedVocalFile(file)) {
-      setUploadDragOver(false);
-      flashRejectedUpload();
-      return;
-    }
-
-    setUploadRejected(false);
-    void onVocalUpload?.(file);
-  };
-
-  const handleSidebarUploadInput = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.currentTarget.value = "";
-    if (file) {
-      handleSidebarVocalFile(file);
-    }
-  };
-
-  const handleSidebarUploadDragOver = (event: DragEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    setUploadDragOver(true);
-  };
-
-  const handleSidebarUploadDragLeave = () => {
-    setUploadDragOver(false);
-  };
-
-  const handleSidebarUploadDrop = (event: DragEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    setUploadDragOver(false);
-    const file = event.dataTransfer.files[0];
-    if (file) {
-      handleSidebarVocalFile(file);
-    }
-  };
+  const showGreenDot = readyAssets.length > 0;
 
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brandRow}>
-        <Link href="/projects" className={styles.homeLink} aria-label="MimiQ Projects">
+        <Link href="/projects" className={styles.homeLink} aria-label="mimiq Projects">
           <div className={styles.audioWave}>
             <div className={styles.waveBar} />
             <div className={styles.waveBar} />
@@ -265,8 +146,7 @@ export function Sidebar({
             <div className={styles.waveBar} />
           </div>
           <span className={styles.brandText}>
-            <strong>MimiQ</strong>
-            <em>AI mix engine</em>
+            <Logo className="text-sm text-white" />
           </span>
         </Link>
       </div>
@@ -281,15 +161,6 @@ export function Sidebar({
         </span>
       </Link>
 
-      <button
-        type="button"
-        className={`${styles.trackPill} ${dimNavItems ? styles.navDimmed : ""}`}
-        aria-label="Current track"
-      >
-        <span />
-        Lead Vocal
-        <ChevronIcon className={styles.chevronIcon} />
-      </button>
 
       <nav className={`${styles.nav} ${dimNavItems ? styles.navDimmed : ""}`}>
         <Link
@@ -302,47 +173,61 @@ export function Sidebar({
           <div className={styles.navItemLeft}>
             <div className={`${styles.sandboxDot} ${showGreenDot ? styles.sandboxDotActive : ""}`} />
             <SlidersIcon className={styles.navIcon} />
-            Chain
+            Chain Lab
           </div>
         </Link>
 
-        <div className={styles.navItemWrapper}>
-          <Link
-            href="/mix-room"
-            className={`${styles.navItem} ${styles.gatedItem} ${
-              isMixRoomUnlocked ? styles.unlocked : styles.locked
-            } ${activePage === "mix-room" ? styles.navItemActive : ""}`}
-            aria-current={activePage === "mix-room" ? "page" : undefined}
-          >
-            <div className={styles.navItemLeft}>
-              <MixIcon className={styles.navIcon} />
-              Mix Room
-            </div>
-            <LockIcon className={`${styles.lockIcon} ${isMixRoomUnlocked ? styles.lockIconHidden : ""}`} />
-          </Link>
-          {!isMixRoomUnlocked && (
-            <div className={styles.tooltip}>Upload a vocal in Sandbox first</div>
-          )}
-        </div>
+        <Link
+          href="/stem-splitter"
+          className={`${styles.navItem} ${
+            activePage === "stem-splitter" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "stem-splitter" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <SplitIcon className={styles.navIcon} />
+            Stem Rip
+          </div>
+        </Link>
 
-        <div className={styles.navItemWrapper}>
-          <Link
-            href="/level-lab"
-            className={`${styles.navItem} ${styles.gatedItem} ${
-              isLevelLabUnlocked ? styles.unlocked : styles.locked
-            } ${activePage === "level-lab" ? styles.navItemActive : ""}`}
-            aria-current={activePage === "level-lab" ? "page" : undefined}
-          >
-            <div className={styles.navItemLeft}>
-              <ActivityIcon className={styles.navIcon} />
-              Level Lab
-            </div>
-            <LockIcon className={`${styles.lockIcon} ${isLevelLabUnlocked ? styles.lockIconHidden : ""}`} />
-          </Link>
-          {!isLevelLabUnlocked && (
-            <div className={styles.tooltip}>Upload a vocal in Sandbox first</div>
-          )}
-        </div>
+        <Link
+          href="/vocal-diagnostics"
+          className={`${styles.navItem} ${
+            activePage === "vocal-diagnostics" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "vocal-diagnostics" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <TuneIcon className={styles.navIcon} />
+            Vocal Check
+          </div>
+        </Link>
+
+        <Link
+          href="/mix-room"
+          className={`${styles.navItem} ${
+            activePage === "mix-room" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "mix-room" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <MixIcon className={styles.navIcon} />
+            Collision Check
+          </div>
+        </Link>
+
+        <Link
+          href="/level-lab"
+          className={`${styles.navItem} ${
+            activePage === "level-lab" ? styles.navItemActive : ""
+          }`}
+          aria-current={activePage === "level-lab" ? "page" : undefined}
+        >
+          <div className={styles.navItemLeft}>
+            <ActivityIcon className={styles.navIcon} />
+            E-Val
+          </div>
+        </Link>
 
         <Link
           href="/vault"
@@ -360,86 +245,8 @@ export function Sidebar({
           )}
         </Link>
 
-        {showSidebarUpload && (
-          <div className={styles.sidebarUploadSection}>
-            <AnimatePresence initial={false} mode="wait">
-              {displayVocalName ? (
-                <motion.div
-                  key="uploaded-vocal"
-                  className={styles.uploadedVocalRow}
-                  initial={{ opacity: 0, height: 0, y: -4 }}
-                  animate={{ opacity: 1, height: "auto", y: 0 }}
-                  exit={{ opacity: 0, height: 0, y: -4 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
-                >
-                  <CheckIcon className={styles.uploadedVocalCheck} />
-                  <span className={styles.uploadedVocalName} title={uploadedVocalName ?? ""}>
-                    {displayVocalName}
-                  </span>
-                  <button
-                    type="button"
-                    className={styles.uploadedVocalClear}
-                    onClick={onVocalClear}
-                    aria-label="Clear uploaded vocal"
-                  >
-                    ×
-                  </button>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="sidebar-upload-zone"
-                  className={styles.sidebarUploadMotion}
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
-                >
-                  <button
-                    type="button"
-                    className={`${styles.sidebarUploadZone} ${
-                      uploadDragOver ? styles.sidebarUploadZoneDragging : ""
-                    } ${uploadRejected ? styles.sidebarUploadZoneRejected : ""}`}
-                    onClick={() => uploadInputRef.current?.click()}
-                    onDragOver={handleSidebarUploadDragOver}
-                    onDragLeave={handleSidebarUploadDragLeave}
-                    onDrop={handleSidebarUploadDrop}
-                    aria-label="Upload vocal"
-                  >
-                    <UploadWaveIcon className={styles.sidebarUploadIcon} />
-                    <span className={styles.sidebarUploadText}>Drop vocal</span>
-                    <span className={styles.sidebarUploadBrowse}>or browse</span>
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <input
-              ref={uploadInputRef}
-              type="file"
-              accept=".wav,.mp3"
-              className={styles.sidebarUploadInput}
-              onChange={handleSidebarUploadInput}
-            />
-          </div>
-        )}
-
-        <div className={styles.eraSection}>
-          <div className={styles.sectionHeader}>
-            <span>Vocal presets</span>
-          </div>
-          <div className={styles.eraPills}>
-            {eras.map((era) => (
-              <button
-                key={era.id}
-                className={`${styles.eraPill} ${
-                  activeEra.id === era.id ? styles.eraPillActive : ""
-                }`}
-                onClick={() => onEraChange(era)}
-              >
-                <span className={styles.presetDot} />
-                <span className={styles.eraPillText}>{era.name}</span>
-              </button>
-            ))}
-          </div>
+        <div className={styles.sidebarUploadWrapper}>
+          <ProjectAudioUploadWidget />
         </div>
       </nav>
 

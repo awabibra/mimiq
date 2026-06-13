@@ -413,7 +413,7 @@ function UsageAnalyticsSection({ usage }: { usage: UsageState }) {
     <section className={`${styles.section} ${styles.analyticsSection}`} aria-label="Usage analytics">
       <div className={styles.analyticsHeading}>
         <span className={styles.analyticsKicker}>Your studio story</span>
-        <span className={styles.analyticsTitle}>A quick read on your MimiQ run so far.</span>
+        <span className={styles.analyticsTitle}>A quick read on your mimiq run so far.</span>
       </div>
 
       <div className={styles.statsGrid}>
@@ -600,7 +600,7 @@ export function AccountSettingsPanel({ open, onClose }: AccountSettingsPanelProp
     );
 
     if (confirmed) {
-      setMessage("Contact support to delete your MimiQ account.");
+      setMessage("Contact support to delete your mimiq account.");
     }
   };
 

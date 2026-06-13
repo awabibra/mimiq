@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { eras } from "@/lib/eras";
+import { getAuthSession } from "@/lib/auth";
 import { useStore } from "@/lib/store";
 import { createLocalProject, useProject } from "@/lib/useProject";
 import {
@@ -65,9 +66,9 @@ function OnboardingFlow() {
     }
   }, []);
 
-  const goSandbox = useCallback(() => {
-    sessionStorage.setItem("mimiq-from-onboarding", "1");
-    navigateTo("/sandbox");
+  const finishSetup = useCallback(async () => {
+    const auth = await getAuthSession();
+    navigateTo(auth ? "/projects" : "/auth?mode=signup&next=%2Fprojects");
   }, [navigateTo]);
 
   /* ── Save & navigate (uses PageTransition exit) ── */
@@ -83,12 +84,12 @@ function OnboardingFlow() {
         era: selectedEra,
       })
     );
-    goSandbox();
+    await finishSetup();
   }, [
+    finishSetup,
     selectedDaw,
     selectedEra,
     saving,
-    goSandbox,
     setActiveProject,
     setDaw,
     setEra,

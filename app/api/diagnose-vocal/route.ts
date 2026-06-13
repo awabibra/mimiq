@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  assetResolutionResponse,
+  resolveProjectAssetFile,
+} from "@/lib/serverProjectAudio";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
@@ -26,7 +30,24 @@ export async function POST(req: NextRequest) {
     }
 
     const formData = await req.formData();
-    const vocal = formData.get("vocal") as File | null;
+    const projectId = (formData.get("projectId") as string) || null;
+    const vocalAssetId = (formData.get("vocalAssetId") as string) || null;
+    let vocal = formData.get("vocal") as File | null;
+
+    try {
+      const asset = await resolveProjectAssetFile({
+        req,
+        projectId,
+        assetId: vocalAssetId,
+        allowedKinds: ["vocal", "full_song"],
+        label: "Vocal",
+      });
+      vocal = asset?.file ?? vocal;
+    } catch (error) {
+      const response = assetResolutionResponse(error);
+      if (response) return response;
+      throw error;
+    }
 
     if (!vocal) {
       return NextResponse.json(
@@ -36,9 +57,10 @@ export async function POST(req: NextRequest) {
     }
 
     const lowerName = vocal.name.toLowerCase();
-    if (!lowerName.endsWith(".wav") && !lowerName.endsWith(".mp3")) {
+    const supportedExt = [".wav", ".mp3", ".flac", ".aif", ".aiff"];
+    if (!supportedExt.some((ext) => lowerName.endsWith(ext))) {
       return NextResponse.json(
-        { error: "unsupported_format", message: "Vocal Diagnostics accepts .wav or .mp3." },
+        { error: "unsupported_format", message: "Vocal Diagnostics accepts .wav, .mp3, .flac, or .aiff." },
         { status: 415 }
       );
     }

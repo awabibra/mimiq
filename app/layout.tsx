@@ -3,7 +3,7 @@ import { AuthListener } from "@/components/AuthListener";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MimiQ — Vocal Mixing Intelligence",
+  title: "mimiq — Vocal Mixing Intelligence",
   description:
     "Analyze raw vocals and generate measured DAW-specific mixing chains for bedroom producers.",
 };

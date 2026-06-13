@@ -18,7 +18,6 @@
   grid-template-columns: minmax(0, 1fr) 280px;
   grid-template-rows: 74px minmax(0, 1fr) 64px;
   min-width: 0;
-  height: 100vh;
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
@@ -135,6 +134,27 @@
   line-height: 1;
 }
 
+.metricStatusLabel {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metricStatusLabel[data-color="red"] {
+  color: #ff674d;
+}
+
+.metricStatusLabel[data-color="yellow"] {
+  color: var(--status-active);
+}
+
+.metricStatusLabel[data-color="green"] {
+  color: var(--accent);
+}
+
 .metricSource {
   position: absolute;
   right: 14px;
@@ -214,6 +234,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.headerSources {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -486,7 +513,8 @@
 }
 
 .xyPanelSection {
-  margin-top: auto;
+  margin-top: 16px;
+  padding-bottom: 24px;
   border-bottom: none;
 }
 
@@ -745,6 +773,10 @@
     grid-column: 1;
     grid-row: 2;
     min-height: 560px;
+  }
+
+  .headerSources {
+    display: none;
   }
 
   .assistantPanel {

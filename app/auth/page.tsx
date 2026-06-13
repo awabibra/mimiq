@@ -4,9 +4,14 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { Logo } from "@/components/ui/logo";
 import styles from "./page.module.css";
 
 type Mode = "signin" | "signup";
+
+const safeMode = (value: string | null): Mode => {
+  return value === "signup" ? "signup" : "signin";
+};
 
 const safeNext = (value: string | null) => {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
@@ -35,6 +40,11 @@ export default function AuthPage() {
     return `${window.location.origin}/auth/callback?next=${next}`;
   }, [nextPath]);
 
+  const cameFromOnboarding = useCallback(() => {
+    const params = new URLSearchParams(window.location.search);
+    return safeMode(params.get("mode")) === "signup";
+  }, []);
+
   useEffect(() => {
     let live = true;
 
@@ -46,6 +56,8 @@ export default function AuthPage() {
         return;
       }
 
+      const params = new URLSearchParams(window.location.search);
+      setMode(safeMode(params.get("mode")));
       setReady(true);
     });
 
@@ -130,10 +142,10 @@ export default function AuthPage() {
 
   return (
     <main className={styles.page}>
-      <section className={styles.shell} aria-label="MimiQ authentication">
+      <section className={styles.shell} aria-label="mimiq authentication">
         <div className={styles.context}>
           <div className={styles.brand}>
-            <span className={styles.mark}>MimiQ</span>
+            <Logo className={styles.mark} />
             <span className={styles.rule} />
           </div>
 
@@ -162,7 +174,14 @@ export default function AuthPage() {
               <button
                 type="button"
                 className={mode === "signup" ? styles.active : ""}
-                onClick={() => setMode("signup")}
+                onClick={() => {
+                  if (cameFromOnboarding()) {
+                    setMode("signup");
+                    return;
+                  }
+
+                  router.push("/onboarding");
+                }}
               >
                 Sign up
               </button>

@@ -7,6 +7,10 @@ import type {
   LevelLabResponse,
   LevelMetrics,
 } from "@/lib/types";
+import {
+  assetResolutionResponse,
+  resolveProjectAssetFile,
+} from "@/lib/serverProjectAudio";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
@@ -254,8 +258,35 @@ export async function POST(req: NextRequest) {
     const daw = (formData.get("daw") as string) || "Logic Pro";
     const eraId = (formData.get("era") as string) || "golden";
     const rawMetricsStr = formData.get("rawMetrics") as string | null;
-    const rawFile = fileFromForm(formData, "rawFile");
-    const processedFile = fileFromForm(formData, "processedFile");
+    const projectId = (formData.get("projectId") as string) || null;
+    const rawAssetId = (formData.get("rawAssetId") as string) || null;
+    const processedAssetId = (formData.get("processedAssetId") as string) || null;
+    let rawFile = fileFromForm(formData, "rawFile");
+    let processedFile = fileFromForm(formData, "processedFile");
+
+    try {
+      const rawAsset = await resolveProjectAssetFile({
+        req,
+        projectId,
+        assetId: rawAssetId,
+        allowedKinds: ["vocal", "full_song"],
+        label: "Raw",
+      });
+      const processedAsset = await resolveProjectAssetFile({
+        req,
+        projectId,
+        assetId: processedAssetId,
+        allowedKinds: ["vocal", "full_song", "stem", "reference", "processed"],
+        label: "Processed",
+      });
+
+      rawFile = rawAsset?.file ?? rawFile;
+      processedFile = processedAsset?.file ?? processedFile;
+    } catch (error) {
+      const response = assetResolutionResponse(error);
+      if (response) return response;
+      throw error;
+    }
 
     if (!processedFile) {
       return NextResponse.json(
@@ -266,7 +297,7 @@ export async function POST(req: NextRequest) {
 
     if (processedFile.size > MAX_FILE_SIZE || (rawFile && rawFile.size > MAX_FILE_SIZE)) {
       return NextResponse.json(
-        { error: "file_too_large", message: "Level Lab supports files up to 20 MB each." },
+        { error: "file_too_large", message: "E-Val supports files up to 20 MB each." },
         { status: 413 }
       );
     }
@@ -285,7 +316,7 @@ export async function POST(req: NextRequest) {
         {
           error: "analysis_failed",
           message:
-            "Raw vocal is required for Level Lab. Upload or analyze the raw vocal in Sandbox first.",
+            "Raw vocal is required for E-Val. Upload or analyze the raw vocal in Sandbox first.",
         },
         { status: 400 }
       );
@@ -322,7 +353,7 @@ export async function POST(req: NextRequest) {
         fallback_used: fallbackUsed,
         fallback_reason: fallbackReason,
         message:
-          "Level Lab needs the audio backend to measure the raw and processed files. Try again when the audio service is available.",
+          "E-Val needs the audio backend to measure the raw and processed files. Try again when the audio service is available.",
       });
     }
 
@@ -334,6 +365,8 @@ export async function POST(req: NextRequest) {
       rawMetrics,
       processedMetrics,
       delta,
+      rawAssetId,
+      processedAssetId,
       audio_service_status: audioServiceStatus,
       fallback_used: fallbackUsed,
       fallback_reason: fallbackReason,

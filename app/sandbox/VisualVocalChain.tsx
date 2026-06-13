@@ -24,6 +24,7 @@ import {
   type DawName,
   type GenreName,
 } from "@/lib/chainKnowledge";
+import { FeedbackPanel } from "./chainLab/FeedbackPanel";
 import styles from "./VisualVocalChain.module.css";
 
 interface VisualVocalChainProps {
@@ -35,6 +36,7 @@ interface VisualVocalChainProps {
   evaluating?: boolean;
   evaluationResult?: EvaluationResult | null;
   feedbackPanelOpen?: boolean;
+  displayedMeasuredFit?: EvaluationResult["measured_fit"];
   currentGenre?: string;
   currentDaw?: string;
   measuredFit?: EvaluationResult["measured_fit"];
@@ -993,12 +995,6 @@ function severityClass(severity: EvaluationSeverity) {
   return styles.nodeShellSuggestion;
 }
 
-function severityDotClass(severity: EvaluationSeverity) {
-  if (severity === "critical") return styles.severityCritical;
-  if (severity === "warning") return styles.severityWarning;
-  return styles.severitySuggestion;
-}
-
 export function VisualVocalChain({
   chain,
   engineerNote,
@@ -1008,6 +1004,7 @@ export function VisualVocalChain({
   evaluating = false,
   evaluationResult = null,
   feedbackPanelOpen = false,
+  displayedMeasuredFit,
   currentGenre,
   currentDaw,
   measuredFit,
@@ -1562,6 +1559,7 @@ export function VisualVocalChain({
                   )}
                   <FeedbackPanel
                     result={evaluationResult}
+                    displayedMeasuredFit={displayedMeasuredFit}
                     isDirty={isDirty}
                     evaluating={evaluating}
                     onClose={() => onFeedbackPanelOpenChange?.(false)}
@@ -2242,124 +2240,5 @@ function BusPills({
         );
       })}
     </motion.div>
-  );
-}
-
-function FeedbackPanel({
-  result,
-  isDirty,
-  evaluating,
-  onClose,
-  onEvaluate,
-  onJump,
-}: {
-  result: EvaluationResult;
-  isDirty: boolean;
-  evaluating: boolean;
-  onClose: () => void;
-  onEvaluate?: () => void;
-  onJump: (issue: EvaluationIssue) => void;
-}) {
-  const [strengthsOpen, setStrengthsOpen] = useState(false);
-  const fitClass =
-    result.measured_fit === "good"
-      ? styles.verdict_good
-      : result.measured_fit === "needs_work"
-        ? styles.verdict_needs_work
-        : "";
-  const fitLabel =
-    result.measured_fit === "good"
-      ? "Measured fit good"
-      : result.measured_fit === "needs_work"
-        ? "Measured fit needs work"
-        : "Measured fit unknown";
-
-  return (
-    <div className={styles.feedbackPanel}>
-      <button
-        type="button"
-        className={styles.feedbackClose}
-        onClick={onClose}
-        aria-label="Close feedback"
-      >
-        x
-      </button>
-
-      <p className={styles.feedbackOverall}>{result.overall}</p>
-
-      <section className={styles.feedbackSection}>
-        <span className={styles.feedbackSectionTitle}>Issues</span>
-        <div className={styles.issueList}>
-          {result.issues.length > 0 ? (
-            result.issues.map((issue, index) => (
-              <button
-                type="button"
-                className={styles.issueCard}
-                key={`${issue.plugin}-${index}`}
-                onClick={() => onJump(issue)}
-              >
-                <span className={`${styles.severityDot} ${severityDotClass(issue.severity)}`} />
-                <span className={styles.issuePlugin}>{issue.plugin}</span>
-                <strong>{issue.problem}</strong>
-                <span className={styles.issueFix}>Fix: {issue.fix}</span>
-                <em>{issue.why}</em>
-                <span className={styles.jumpButton}>Jump to plugin</span>
-              </button>
-            ))
-          ) : (
-            <span className={styles.noIssues}>No issues returned.</span>
-          )}
-        </div>
-      </section>
-
-      <section className={styles.feedbackSection}>
-        <button
-          type="button"
-          className={styles.strengthsToggle}
-          onClick={() => setStrengthsOpen((open) => !open)}
-        >
-          Strengths {strengthsOpen ? "-" : "+"}
-        </button>
-        <AnimatePresence>
-          {strengthsOpen && (
-            <motion.div
-              className={styles.strengthList}
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              {result.strengths.length > 0 ? (
-                result.strengths.map((strength) => (
-                  <span key={strength}>
-                    <i />
-                    {strength}
-                  </span>
-                ))
-              ) : (
-                <span className={styles.noIssues}>No strengths called out.</span>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </section>
-
-      <section className={`${styles.verdict} ${fitClass}`}>
-        <span>{fitLabel}</span>
-        <p>{result.explanation}</p>
-        {result.flags.length > 0 && (
-          <p>Flags: {result.flags.join(", ")}</p>
-        )}
-      </section>
-
-      <button
-        type="button"
-        className={`${styles.reevaluateButton} ${isDirty ? styles.reevaluateButtonActive : ""}`}
-        disabled={!isDirty || evaluating}
-        onClick={onEvaluate}
-      >
-        {evaluating ? "Analysing..." : "Re-evaluate"}
-      </button>
-    </div>
   );
 }

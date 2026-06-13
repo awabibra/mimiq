@@ -2,33 +2,34 @@
 @import "tailwindcss";
 
 /* ============================================================
-   MimiQ Design System — globals.css
+   mimiq Design System — globals.css
    Aesthetic: Linear + Vercel dashboard + Apple dark mode
    ============================================================ */
 
 :root {
   /* ── Backgrounds ── */
-  --bg-base: #0A0A0B;
-  --bg-surface: #111113;
-  --bg-elevated: #18181C;
+  --bg-base: #090909;
+  --bg-surface: #0d0d0e;
+  --bg-elevated: #151516;
   --bg-glass: rgba(17, 17, 19, 0.74);
+  --bg-material: rgba(255, 255, 255, 0.028);
 
   /* ── Borders ── */
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-active: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.055);
+  --border-active: rgba(255, 255, 255, 0.14);
   --border-default: var(--border-subtle);
   --border-hover: var(--border-active);
 
   /* ── Text ── */
-  --text-primary: #F0F0F0;
-  --text-secondary: #6B6B72;
-  --text-tertiary: #3A3A42;
+  --text-primary: #f4f4f1;
+  --text-secondary: #8b8b8a;
+  --text-tertiary: #4f4f4d;
 
   /* ── Era accent (default: Golden / hip-hop) ── */
-  --accent: #C8F135;
-  --accent-lime: #C8F135;
-  --accent-lime-dim: rgba(200, 241, 53, 0.13);
-  --status-ready: #C8F135;
+  --accent: #CBFF1E;
+  --accent-lime: #CBFF1E;
+  --accent-lime-dim: rgba(203, 255, 30, 0.13);
+  --status-ready: #CBFF1E;
   --status-active: #F5A623;
   --status-mixing: #7B61FF;
 
@@ -58,6 +59,13 @@
   --radius-input: 4px;
   --radius-button: 4px;
   --radius-pill: 20px;
+
+  /* ── Studio material ── */
+  --studio-line: #242424;
+  --studio-noise: radial-gradient(rgba(255, 255, 255, 0.16) 0.55px, transparent 0.55px);
+  --studio-panel-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 24px 70px rgba(0, 0, 0, 0.42);
 
   /* ── Motion ── */
   --ease-snap: cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -169,3 +177,44 @@ small {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.12);
 }
+
+/* ── Global Tool Header (Clear unblurred picker strip) ── */
+.globalToolHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  z-index: 50; /* Ensure it stays above blurred content */
+}
+
+.globalToolHeaderTitle {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.globalToolHeaderTitle span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.globalToolHeaderTitle h1 {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.globalToolHeaderPickers {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto; /* Push to the right */
+}
+

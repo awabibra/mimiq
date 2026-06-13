@@ -5,9 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { defaultEra, type Era, getEraById } from "@/lib/eras";
 import type { GeneratedChain } from "@/lib/types";
-import { Sidebar } from "@/components/Sidebar";
-import { MobileTabBar } from "@/components/MobileTabBar";
-import { ProjectGate } from "@/components/ProjectGate";
+import { StudioShell } from "@/components/StudioShell";
+import { formatAudioAssetKind } from "@/components/ProjectAudioUpload";
+import { getProjectAudioAssets } from "@/lib/projectAudio";
 import { isGeneratedChain, useProject } from "@/lib/useProject";
 import styles from "./page.module.css";
 
@@ -95,6 +95,7 @@ export default function VaultPage() {
 
   /* ── State ── */
   const chains = project?.generated_chains.filter(isGeneratedChain) ?? [];
+  const audioAssets = getProjectAudioAssets(project);
   const loading = false;
   const [activeEra, setActiveEra] = useState<Era>(defaultEra);
   const [toast, setToast] = useState<string | null>(null);
@@ -157,27 +158,12 @@ export default function VaultPage() {
      ═══════════════════════════════════════════════════════════ */
 
   return (
-    <ProjectGate>
-    <div className={styles.layout}>
-      {/* ── Sidebar ── */}
-      <Sidebar
-        activePage="vault"
-        activeEra={activeEra}
-        onEraChange={handleEraChange}
-        savedCount={chains.length}
-      />
+    <StudioShell
+      activePage="vault"
+      savedCount={chains.length}
+      contentClassName={styles.main}
+    >
 
-      {/* ── Main content ── */}
-      <main className={styles.main}>
-        {/* Header row */}
-        <div className={styles.header}>
-          <h1 className={styles.headerTitle}>Your chains</h1>
-          {!loading && chains.length > 0 && (
-            <span className={styles.headerBadge}>
-              {chains.length} saved
-            </span>
-          )}
-        </div>
 
         {/* ── Loading state ── */}
         {loading && (
@@ -192,8 +178,8 @@ export default function VaultPage() {
           </div>
         )}
 
-        {/* ── Empty state ── */}
-        {!loading && chains.length === 0 && (
+	        {/* ── Empty state ── */}
+	        {!loading && chains.length === 0 && audioAssets.length === 0 && (
           <div className={styles.emptyState}>
             <ChainLinkIcon className={styles.emptyIcon} />
             <span className={styles.emptyTitle}>No chains saved yet</span>
@@ -204,12 +190,44 @@ export default function VaultPage() {
               Go to Sandbox
             </Link>
           </div>
-        )}
+	        )}
+
+	        {!loading && audioAssets.length > 0 && (
+	          <section className={styles.assetSection} aria-label="Project audio assets">
+	            <div className={styles.header}>
+	              <h2 className={styles.headerTitle}>Project audio</h2>
+	              <span className={styles.headerBadge}>{audioAssets.length} assets</span>
+	            </div>
+	            <div className={styles.grid}>
+	              {audioAssets.map((asset) => (
+	                <div key={asset.id} className={styles.card}>
+	                  <div className={styles.cardTop}>
+	                    <span className={styles.eraPill}>{formatAudioAssetKind(asset.kind)}</span>
+	                    <div className={styles.cardTopMeta}>
+	                      <span className={styles.cardDate}>{asset.status}</span>
+	                    </div>
+	                  </div>
+	                  <span className={styles.cardStepSummary}>{asset.filename}</span>
+	                  <span className={styles.cardAnalysis}>
+	                    {asset.storagePath
+	                      ? "Stored in project audio"
+	                      : asset.error ?? "Waiting for upload"}
+	                  </span>
+	                </div>
+	              ))}
+	            </div>
+	          </section>
+	        )}
 
         {/* ── Chain card grid ── */}
         {!loading && chains.length > 0 && (
-          <div className={styles.grid}>
-            {chains.map((chain) => {
+          <section className={styles.assetSection} aria-label="Saved chains">
+            <div className={styles.header}>
+              <h2 className={styles.headerTitle}>Your chains</h2>
+              <span className={styles.headerBadge}>{chains.length} saved</span>
+            </div>
+            <div className={styles.grid}>
+              {chains.map((chain) => {
               const era = getChainEra(chain);
               return (
                 <div
@@ -292,16 +310,11 @@ export default function VaultPage() {
                 </div>
               );
             })}
-          </div>
+            </div>
+          </section>
         )}
-      </main>
-
-      {/* ── Mobile tab bar ── */}
-      <MobileTabBar activePage="vault" />
-
       {/* ── Toast ── */}
       {toast && <div className={styles.toast}>{toast}</div>}
-    </div>
-    </ProjectGate>
+    </StudioShell>
   );
 }

@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { Project, ProjectPatch } from "@/lib/types";
+import type { AudioAssetKind, Project, ProjectPatch } from "@/lib/types";
 
 const PROJECT_FILE_BUCKET = "project-files";
 
@@ -91,7 +91,7 @@ export async function saveProjectPatch(projectId: string, patch: ProjectPatch) {
 export async function uploadProjectAudio(params: {
   userId: string;
   projectId: string;
-  kind: "beat" | "vocal" | "processed";
+  kind: AudioAssetKind;
   file: File;
 }) {
   const id =
@@ -112,6 +112,11 @@ export async function uploadProjectAudio(params: {
   if (error) throw error;
 
   return path;
+}
+
+export async function removeProjectAudio(path: string) {
+  const { error } = await supabase.storage.from(PROJECT_FILE_BUCKET).remove([path]);
+  if (error) throw error;
 }
 
 export async function downloadProjectAudio(path: string, filename: string) {

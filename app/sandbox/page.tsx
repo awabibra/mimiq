@@ -7,8 +7,6 @@ import {
   useRef,
   useState,
   useLayoutEffect,
-  type ChangeEvent,
-  type DragEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
@@ -23,21 +21,34 @@ import type {
   AnalysisResponse,
   AnalysisError,
   EvaluationResult,
+  ProjectAudioAsset,
 } from "@/lib/types";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AnimatedGrid } from "@/components/AnimatedGrid";
 import { AuthModal } from "@/components/AuthModal";
 import { ProjectGate } from "@/components/ProjectGate";
+import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
+import { AudioAssetPicker } from "@/components/AudioAssetPicker";
+
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/useAuth";
 import { useAudioStore } from "@/lib/useAudioStore";
+import { authHeaders } from "@/lib/apiAuth";
 import {
   createProjectRecord,
-  downloadProjectAudio,
   saveProjectPatch,
-  uploadProjectAudio,
 } from "@/lib/projects";
+import {
+  getFullSongAsset,
+  getAssetPlaybackUrl,
+  getPrimaryBeatAsset,
+  getPrimaryVocalAsset,
+  getProjectAudioAssets,
+  prepareAudioFile,
+  uploadPreparedAudioAsset,
+  upsertProjectAudioAsset,
+} from "@/lib/projectAudio";
 import {
   getCurrentVocal,
   getLatestGeneratedChain,
@@ -45,10 +56,26 @@ import {
   isLocalProject,
   useProject,
 } from "@/lib/useProject";
-import { getGenreProfile } from "@/lib/chainKnowledge";
 import { supabase } from "@/lib/supabase";
-import type { GeneratedChain, ProjectPatch, VocalVersion } from "@/lib/types";
+import type { GeneratedChain, ProjectPatch } from "@/lib/types";
 import { VisualVocalChain } from "./VisualVocalChain";
+import {
+  buildAssistantModel,
+  type AssistantFix,
+  type AssistantModel,
+} from "./chainLab/assistant";
+import {
+  buildMetricReadouts,
+  formatInsights,
+  hasMeasuredProvenance,
+  measuredFitForProvenance,
+  provenanceFromChainData,
+  provenanceFromResult,
+  SAFE_ANALYSIS_PROVENANCE,
+  type AnalysisProvenance,
+  type AudioInsights,
+  type MetricReadout,
+} from "./chainLab/metrics";
 import styles from "./page.module.css";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -58,10 +85,6 @@ import styles from "./page.module.css";
 type AppState = "empty" | "analyzing" | "results";
 type SandboxMode = "view" | "edit";
 type VocalChain = ChainStep[];
-type AnalysisProvenance = Pick<
-  AnalysisResponse,
-  "analysis_version" | "fallback_used" | "audio_service_status"
->;
 
 type EditState = {
   mode: SandboxMode;
@@ -71,43 +94,6 @@ type EditState = {
   feedbackPanelOpen: boolean;
   evaluating: boolean;
 };
-
-interface AudioInsights {
-  loudness: string;
-  dynamicRange: string;
-  brightness: string;
-}
-
-interface MetricReadout {
-  label: string;
-  value: string;
-  source: "measured" | "chain" | "unknown";
-}
-
-type AssistantSeverity = "critical" | "warning" | "note";
-
-interface AssistantIssue {
-  id: string;
-  severity: AssistantSeverity;
-  label: string;
-  detail: string;
-  claim: "measured" | "estimated" | "unknown";
-  targetRole?: string;
-}
-
-interface AssistantFix {
-  id: string;
-  label: string;
-  detail: string;
-  targetStep?: number;
-  targetRole?: string;
-}
-
-interface AssistantModel {
-  vibeSummary: string;
-  issues: AssistantIssue[];
-  fixes: AssistantFix[];
-}
 
 interface HighlightTarget {
   step: number;
@@ -123,13 +109,7 @@ const initialEditState: EditState = {
   evaluating: false,
 };
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 const SAVE_AFTER_AUTH_KEY = "mimiq-save-chain-after-auth";
-const SAFE_ANALYSIS_PROVENANCE: AnalysisProvenance = {
-  analysis_version: "1.0",
-  fallback_used: true,
-  audio_service_status: "unknown",
-};
 
 /* ═══════════════════════════════════════════════════════════════
    Analysis steps labels (cosmetic — fill the wait)
@@ -145,23 +125,6 @@ const ANALYSIS_STEPS = [
 /* ═══════════════════════════════════════════════════════════════
    Inline SVG icons
    ═══════════════════════════════════════════════════════════════ */
-
-function UploadArrowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" y1="19" x2="12" y2="5" />
-      <polyline points="5,12 12,5 19,12" />
-    </svg>
-  );
-}
 
 function CheckIcon({ className }: { className?: string }) {
   return (
@@ -188,6 +151,9 @@ function CheckIcon({ className }: { className?: string }) {
 async function callAnalyze(params: {
   vocalFile?: File;
   beatFile?: File | null;
+  projectId?: string | null;
+  vocalAssetId?: string | null;
+  beatAssetId?: string | null;
   daw: string;
   mic?: string | null;
   plugins?: string[];
@@ -202,6 +168,9 @@ async function callAnalyze(params: {
   form.append("daw", params.daw);
   form.append("era", params.eraId);
 
+  if (params.projectId) form.append("projectId", params.projectId);
+  if (params.vocalAssetId) form.append("vocalAssetId", params.vocalAssetId);
+  if (params.beatAssetId) form.append("beatAssetId", params.beatAssetId);
   if (params.vocalFile) form.append("vocalFile", params.vocalFile);
   if (params.beatFile) form.append("beatFile", params.beatFile);
   if (params.xyX != null) form.append("xyX", String(params.xyX));
@@ -216,7 +185,9 @@ async function callAnalyze(params: {
     );
   }
 
-  const headers: HeadersInit = {};
+  const headers: Record<string, string> = {
+    ...((await authHeaders()) as Record<string, string>),
+  };
   if (params.clientMetrics) {
     headers["x-client-audio-metrics"] = JSON.stringify(params.clientMetrics);
   }
@@ -242,9 +213,13 @@ async function callEvaluateChain(params: {
   daw: string;
   iteration: number;
 }): Promise<EvaluationResult> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...((await authHeaders()) as Record<string, string>),
+  };
   const res = await fetch("/api/evaluate-chain", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(params),
   });
 
@@ -263,369 +238,15 @@ function cloneChain(chain: ChainStep[]): ChainStep[] {
   return JSON.parse(JSON.stringify(chain)) as ChainStep[];
 }
 
-async function computeClientMetrics(file: File): Promise<Partial<AudioMetrics>> {
-  const AudioCtx =
-    window.AudioContext ||
-    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
-
-  if (!AudioCtx) {
-    throw new Error("Web Audio API is unavailable.");
-  }
-
-  const ctx = new AudioCtx();
-  try {
-    const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
-    const data = buffer.getChannelData(0);
-    const energy = data.reduce((sum, s) => sum + s * s, 0);
-    const rms = Math.sqrt(energy / data.length);
-    const safeRms = Math.max(rms, 1e-8);
-
-    const lufs = 20 * Math.log10(safeRms) - 0.691;
-    const peak = data.reduce((max, s) => Math.max(max, Math.abs(s)), 0);
-    const peakDb = 20 * Math.log10(Math.max(peak, 1e-8));
-    const dynamicRange = peakDb - 20 * Math.log10(safeRms);
-
-    return {
-      lufs: Math.max(-40, lufs),
-      dynamicRange: Math.min(20, dynamicRange),
-    };
-  } finally {
-    await ctx.close().catch(() => undefined);
-  }
-}
-
 /* ═══════════════════════════════════════════════════════════════
-   Format helpers
+   Chain edit helpers
    ═══════════════════════════════════════════════════════════════ */
-
-function formatInsights(m: AudioMetrics): AudioInsights {
-  const centroidKhz =
-    m.spectralCentroid > 100
-      ? m.spectralCentroid / 1000
-      : m.spectralCentroid;
-
-  return {
-    loudness: `${m.lufs.toFixed(1)} LUFS`,
-    dynamicRange: `${m.dynamicRange.toFixed(1)} dB`,
-    brightness: `${centroidKhz.toFixed(1)} kHz`,
-  };
-}
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
 const formatSignedDb = (value: number) =>
   `${value > 0 ? "+" : ""}${Number.isInteger(value) ? value : value.toFixed(1)}`;
-
-const toKhz = (hz: number) => (hz > 100 ? hz / 1000 : hz);
-
-const formatMetricDb = (value: number) =>
-  `${value > 0 ? "+" : ""}${Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(1)} dB`;
-
-function parsePresenceFromChain(chain: ChainStep[]) {
-  for (const step of chain) {
-    const role = step.role ?? "";
-    if (!/(additive|air|presence|eq)/i.test(`${role} ${step.tool}`)) continue;
-
-    const matches = Array.from(
-      step.action.matchAll(/([+\-−]?\d+(?:\.\d+)?)\s*dB\s+at\s+(\d+(?:\.\d+)?)\s*(kHz|Hz)/gi)
-    );
-    const presence = matches.find((match) => {
-      const rawFreq = Number(match[2]);
-      const hz = match[3]?.toLowerCase() === "khz" ? rawFreq * 1000 : rawFreq;
-      return hz >= 1800 && hz <= 5500;
-    });
-
-    if (presence?.[1]) {
-      const value = Number(presence[1].replace("−", "-"));
-      if (Number.isFinite(value)) return formatMetricDb(value);
-    }
-  }
-
-  return "--";
-}
-
-function formatPresenceBand(metrics: AudioMetrics | null, chain: ChainStep[]) {
-  if (metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)) {
-    const presenceDb = 10 * Math.log10(Math.max(metrics.harshness, 1e-12));
-    return `${presenceDb.toFixed(1)} dB`;
-  }
-
-  return parsePresenceFromChain(chain);
-}
-
-function buildMetricReadouts(
-  insights: AudioInsights | null,
-  metrics: AudioMetrics | null,
-  chain: ChainStep[]
-): MetricReadout[] {
-  return [
-    {
-      label: "Loudness",
-      value: insights?.loudness ?? (metrics ? `${metrics.lufs.toFixed(1)} LUFS` : "--"),
-      source: metrics ? "measured" : "unknown",
-    },
-    {
-      label: "Dynamic Range",
-      value:
-        insights?.dynamicRange ??
-        (metrics ? `${metrics.dynamicRange.toFixed(1)} dB` : "--"),
-      source: metrics ? "measured" : "unknown",
-    },
-    {
-      label: "Brightness",
-      value:
-        insights?.brightness ??
-        (metrics ? `${toKhz(metrics.spectralCentroid).toFixed(1)} kHz` : "--"),
-      source: metrics ? "measured" : "unknown",
-    },
-    {
-      label: "Presence",
-      value: formatPresenceBand(metrics, chain),
-      source:
-        metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)
-          ? "measured"
-          : chain.length > 0
-            ? "chain"
-            : "unknown",
-    },
-  ];
-}
-
-function findStepByRole(chain: ChainStep[], role: string) {
-  const roleText = role.toLowerCase();
-  return chain.find((step) => {
-    const haystack = `${step.role ?? ""} ${step.tool} ${step.action}`.toLowerCase();
-    if (roleText === "chain") return true;
-    if (roleText === "eq") return /eq|shelf|boost|cut/.test(haystack);
-    if (roleText === "deesser") return haystack.includes("deess") || haystack.includes("de-ess");
-    if (roleText === "highpass") return haystack.includes("highpass") || haystack.includes("high-pass");
-    if (roleText === "compressor") return haystack.includes("compressor") || haystack.includes("comp");
-    if (roleText === "compressor_primary") return haystack.includes("compressor") || haystack.includes("comp");
-    if (roleText === "mastering_limiter") return haystack.includes("limiter") || haystack.includes("ceiling");
-    if (roleText === "presence") return haystack.includes("eq") || haystack.includes("presence") || haystack.includes("air");
-    return haystack.includes(roleText);
-  });
-}
-
-function issueToFix(issue: AssistantIssue, chain: ChainStep[]): AssistantFix {
-  const target = issue.targetRole ? findStepByRole(chain, issue.targetRole) : undefined;
-  const fixLabels: Record<string, Pick<AssistantFix, "label" | "detail">> = {
-    sibilance: {
-      label: "De-ess around 7 kHz",
-      detail: "Reduces sharp consonants while keeping the top end visible.",
-    },
-    low_end: {
-      label: "High-pass filter",
-      detail: "Cleans low-end rumble before compression raises it.",
-    },
-    dynamics: {
-      label: "Compression leveling",
-      detail: "Smooths loudness swings without promising a finished mix.",
-    },
-    quiet: {
-      label: "Re-check gain staging",
-      detail: "Keeps the chain target aligned with the selected vibe.",
-    },
-    bright: {
-      label: "Soften presence EQ",
-      detail: "Pulls the vocal away from brittle upper-mid emphasis.",
-    },
-    dark: {
-      label: "Lift presence carefully",
-      detail: "Adds clarity without treating brightness as a guaranteed fix.",
-    },
-  };
-  const copy = fixLabels[issue.id] ?? {
-    label: "Review chain stage",
-    detail: "This points to the closest matching plugin in the current chain.",
-  };
-
-  return {
-    id: `fix-${issue.id}`,
-    ...copy,
-    targetRole: issue.targetRole,
-    targetStep: target?.step,
-  };
-}
-
-function evaluationIssueToAssistantIssue(
-  issue: EvaluationResult["issues"][number],
-  index: number,
-  claim: AssistantIssue["claim"]
-): AssistantIssue {
-  return {
-    id: `evaluation-${issue.plugin}-${index}`,
-    severity: issue.severity === "critical" ? "critical" : issue.severity === "warning" ? "warning" : "note",
-    label: issue.plugin === "chain" ? "Chain edit check" : issue.plugin.replace(/_/g, " "),
-    detail: issue.problem,
-    claim,
-    targetRole: issue.plugin,
-  };
-}
-
-function evaluationIssueToFix(
-  issue: EvaluationResult["issues"][number],
-  index: number,
-  chain: ChainStep[]
-): AssistantFix {
-  const target = findStepByRole(chain, issue.plugin);
-
-  return {
-    id: `fix-evaluation-${issue.plugin}-${index}`,
-    label: issue.fix,
-    detail: issue.why,
-    targetRole: issue.plugin,
-    targetStep: target?.step,
-  };
-}
-
-function buildAssistantModel(
-  metrics: AudioMetrics | null,
-  chain: ChainStep[],
-  eraId: string,
-  provenance: AnalysisProvenance | null,
-  evaluationResult?: EvaluationResult | null
-): AssistantModel {
-  const profile = getGenreProfile(eraId);
-  const issues: AssistantIssue[] = [];
-  const sourceIsFallback = provenance?.fallback_used || provenance?.audio_service_status !== "ok";
-  const claim = sourceIsFallback ? "estimated" : "measured";
-
-  if (evaluationResult) {
-    const evaluationIssues = evaluationResult.issues
-      .slice(0, 3)
-      .map((issue, index) => evaluationIssueToAssistantIssue(issue, index, claim));
-
-    return {
-      vibeSummary: evaluationResult.overall,
-      issues:
-        evaluationIssues.length > 0
-          ? evaluationIssues
-          : [
-              {
-                id: "evaluation-clear",
-                severity: "note",
-                label: "No major edit issue",
-                detail: evaluationResult.explanation,
-                claim,
-              },
-            ],
-      fixes:
-        evaluationResult.issues.length > 0
-          ? evaluationResult.issues
-              .slice(0, 3)
-              .map((issue, index) => evaluationIssueToFix(issue, index, chain))
-          : [
-              {
-                id: "fix-evaluation-keep",
-                label: "Keep evaluated chain",
-                detail: evaluationResult.explanation,
-              },
-            ],
-    };
-  }
-
-  if (!metrics) {
-    return {
-      vibeSummary: "Upload or select a vocal to show measured guidance.",
-      issues: [
-        {
-          id: "unknown",
-          severity: "note",
-          label: "No measured vocal yet",
-          detail: "MimiQ can show the chain, but issues stay unknown until audio is analyzed.",
-          claim: "unknown",
-        },
-      ],
-      fixes: [],
-    };
-  }
-
-  if ((metrics.sibilancePeak ?? -14) > -12) {
-    issues.push({
-      id: "sibilance",
-      severity: (metrics.sibilancePeak ?? -14) > -9 ? "critical" : "warning",
-      label: "Sharp S sounds",
-      detail: `Energy near the de-ess range is ${formatMetricDb(metrics.sibilancePeak ?? -12)}.`,
-      claim,
-      targetRole: "deesser",
-    });
-  }
-
-  if ((metrics.lowEndEnergy ?? 0) > 0.36 || (metrics.lowMidBuildup ?? 0) > 0.0002) {
-    issues.push({
-      id: "low_end",
-      severity: "warning",
-      label: "Low-end rumble",
-      detail: "The measured low band is high enough to check before compression.",
-      claim,
-      targetRole: "highpass",
-    });
-  }
-
-  if (
-    metrics.dynamicRange > profile.dynamic_range_target + 1 ||
-    (metrics.dynamicInconsistency ?? 0) > 0.36
-  ) {
-    issues.push({
-      id: "dynamics",
-      severity: "warning",
-      label: "Uneven vocal level",
-      detail: `${metrics.dynamicRange.toFixed(1)} dB range is above the ${profile.dynamic_range_target} dB target.`,
-      claim,
-      targetRole: "compressor",
-    });
-  }
-
-  if (metrics.lufs < profile.lufs_target - 2) {
-    issues.push({
-      id: "quiet",
-      severity: "note",
-      label: "Vocal sits quiet",
-      detail: `${metrics.lufs.toFixed(1)} LUFS is below the selected target context.`,
-      claim,
-      targetRole: "compressor",
-    });
-  }
-
-  if (metrics.spectralCentroid > 3000) {
-    issues.push({
-      id: "bright",
-      severity: "warning",
-      label: "Top end may feel edgy",
-      detail: `Brightness measured around ${toKhz(metrics.spectralCentroid).toFixed(1)} kHz.`,
-      claim,
-      targetRole: "presence",
-    });
-  } else if (metrics.spectralCentroid < 1800) {
-    issues.push({
-      id: "dark",
-      severity: "note",
-      label: "Vocal reads dark",
-      detail: `Brightness measured around ${toKhz(metrics.spectralCentroid).toFixed(1)} kHz.`,
-      claim,
-      targetRole: "presence",
-    });
-  }
-
-  const visibleIssues = issues.slice(0, 3);
-  return {
-    vibeSummary: `${profile.philosophy.split(".")[0]}.`,
-    issues: visibleIssues,
-    fixes:
-      visibleIssues.length > 0
-        ? visibleIssues.map((issue) => issueToFix(issue, chain)).slice(0, 3)
-        : [
-            {
-              id: "fix-keep-chain",
-              label: "Keep measured chain",
-              detail: "No major measured issue is flagged in this pass.",
-            },
-          ],
-  };
-}
 
 const replaceOrAppend = (
   action: string,
@@ -774,30 +395,6 @@ const newClientId = () => {
   return `${Date.now()}`;
 };
 
-function provenanceFromResult(result: AnalysisResponse): AnalysisProvenance {
-  return {
-    analysis_version: result.analysis_version,
-    fallback_used: result.fallback_used,
-    audio_service_status: result.audio_service_status,
-  };
-}
-
-function provenanceFromChainData(
-  chainData?: GeneratedChain["chain_data"]
-): AnalysisProvenance {
-  if (!chainData) return SAFE_ANALYSIS_PROVENANCE;
-
-  return {
-    analysis_version: chainData.analysis_version ?? "1.0",
-    fallback_used:
-      typeof chainData.fallback_used === "boolean"
-        ? chainData.fallback_used
-        : SAFE_ANALYSIS_PROVENANCE.fallback_used,
-    audio_service_status:
-      chainData.audio_service_status ?? SAFE_ANALYSIS_PROVENANCE.audio_service_status,
-  };
-}
-
 /* ═══════════════════════════════════════════════════════════════
    Transition Overlay Component
    ═══════════════════════════════════════════════════════════════ */
@@ -823,18 +420,7 @@ function SandboxTransitionOverlay() {
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Animated Border Component
-   ═══════════════════════════════════════════════════════════════ */
 
-function AnimatedDashedBorder() {
-  return (
-    <svg className={styles.dashedSvg} xmlns="http://www.w3.org/2000/svg">
-      <rect className={styles.dashedRect1} x="0" y="0" width="100%" height="100%" rx="12" />
-      <rect className={styles.dashedRect2} x="0" y="0" width="100%" height="100%" rx="12" />
-    </svg>
-  );
-}
 
 /* ═══════════════════════════════════════════════════════════════
    Page component
@@ -844,9 +430,6 @@ export default function SandboxPage() {
   /* Zustand Store */
   const { daw, mic, plugins, era: storeEra, setEra } = useStore();
   const setSession = useAudioStore((state) => state.setSession);
-  const sessionVocalFileUrl = useAudioStore((state) => state.vocalFileUrl);
-  const sessionBeatFileUrl = useAudioStore((state) => state.beatFileUrl);
-  const sessionProcessedFileUrl = useAudioStore((state) => state.processedFileUrl);
   const user = useAuth((state) => state.user);
   const project = useProject((state) => state.project);
   const setActiveProject = useProject((state) => state.setActiveProject);
@@ -871,7 +454,9 @@ export default function SandboxPage() {
 
   const [vocalFile, setVocalFile] = useState<File | null>(null);
   const [beatFile, setBeatFile] = useState<File | null>(null);
-  const [dragOver, setDragOver] = useState(false);
+  const [selectedChainAssetId, setSelectedChainAssetId] = useState<string | null>(null);
+  const [selectedBeatAssetId, setSelectedBeatAssetId] = useState<string | null>(null);
+  const [selectedPlaybackUrl, setSelectedPlaybackUrl] = useState<string | null>(null);
   const [chainLoading, setChainLoading] = useState(false);
 
   /* Cinematic intro: only shown when arriving from onboarding */
@@ -922,8 +507,6 @@ export default function SandboxPage() {
   /* Whether the cursor has moved since the last full chain generation */
   const [hasPendingGenerate, setHasPendingGenerate] = useState(false);
 
-  const vocalInputRef = useRef<HTMLInputElement>(null);
-  const beatInputRef = useRef<HTMLInputElement>(null);
   const padRef = useRef<HTMLDivElement>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveChainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -996,13 +579,25 @@ export default function SandboxPage() {
 	            .filter(isGeneratedChain)
 	            .find((entry) => entry.id === activeGeneratedChainId) ??
 	          getLatestGeneratedChain(project);
+	        const selectedSourceAsset =
+	          getProjectAudioAssets(project).find((asset) => asset.id === selectedChainAssetId) ??
+	          null;
+	        const analysisInputKind =
+	          selectedSourceAsset?.kind === "vocal" || selectedSourceAsset?.kind === "full_song"
+	            ? selectedSourceAsset.kind
+	            : activeSavedChain?.chain_data.analysisInputKind;
 	        let generatedChains = project.generated_chains;
 	        let savedActiveChainId = activeGeneratedChainId;
 
 	        if (chain.length > 0) {
 	          const provenance =
 	            cachedAnalysisProvenance ?? provenanceFromChainData(activeSavedChain?.chain_data);
-	          const fit = editState.evaluationResult?.measured_fit ?? (chainFitGood ? "good" : undefined);
+	          const measuredProvenance = hasMeasuredProvenance(provenance);
+	          const evaluationFit = editState.evaluationResult?.measured_fit;
+	          const fit =
+	            evaluationFit === "good" && !measuredProvenance
+	              ? "unknown"
+	              : evaluationFit ?? (chainFitGood && measuredProvenance ? "good" : undefined);
 	          const nextId = activeGeneratedChainId ?? newClientId();
 	          let replaced = false;
 
@@ -1020,11 +615,16 @@ export default function SandboxPage() {
 	                summary:
 	                  entry.chain_data.summary ||
 	                  engineerNote ||
-	                  "Measured MimiQ vocal chain.",
+	                  "Measured mimiq vocal chain.",
 	                engineer_note: engineerNote ?? entry.chain_data.engineer_note,
 	                measurements: cachedMetrics ?? entry.chain_data.measurements,
 	                xyPosition: { x: cursorX, y: cursorY },
 	                analysis_version: provenance.analysis_version,
+	                sourceAssetId:
+	                  entry.chain_data.sourceAssetId ?? selectedChainAssetId ?? null,
+	                beatAssetId:
+	                  entry.chain_data.beatAssetId ?? selectedBeatAssetId ?? null,
+	                ...(analysisInputKind ? { analysisInputKind } : {}),
 	                fallback_used: provenance.fallback_used,
 	                audio_service_status: provenance.audio_service_status,
 	                ...(fit ? { measured_fit: fit } : {}),
@@ -1056,11 +656,16 @@ export default function SandboxPage() {
 	                summary:
 	                  activeSavedChain?.chain_data.summary ||
 	                  engineerNote ||
-	                  "Measured MimiQ vocal chain.",
+	                  "Measured mimiq vocal chain.",
 	                engineer_note: engineerNote ?? activeSavedChain?.chain_data.engineer_note,
 	                measurements: cachedMetrics ?? activeSavedChain?.chain_data.measurements,
 	                xyPosition: { x: cursorX, y: cursorY },
 	                analysis_version: provenance.analysis_version,
+	                sourceAssetId:
+	                  activeSavedChain?.chain_data.sourceAssetId ?? selectedChainAssetId ?? null,
+	                beatAssetId:
+	                  activeSavedChain?.chain_data.beatAssetId ?? selectedBeatAssetId ?? null,
+	                ...(analysisInputKind ? { analysisInputKind } : {}),
 	                fallback_used: provenance.fallback_used,
 	                audio_service_status: provenance.audio_service_status,
 	                ...(fit ? { measured_fit: fit } : {}),
@@ -1088,55 +693,38 @@ export default function SandboxPage() {
 	          }
 	        }
 
-	        let patch: ProjectPatch = {
-	          beat_file_url: project.beat_file_url,
-	          beat_filename: project.beat_filename,
-	          vocal_versions: project.vocal_versions,
-	          current_vocal_index: project.current_vocal_index,
-	          generated_chains: generatedChains,
-	          mix_room_report: project.mix_room_report,
-	          level_lab_report: project.level_lab_report,
-	          stem_split_url: project.stem_split_url,
-	          last_opened_at: now,
-	        };
+		        let audio_assets = getProjectAudioAssets(project);
+		        let patch: ProjectPatch = {
+		          audio_assets,
+		          generated_chains: generatedChains,
+		          mix_room_report: project.mix_room_report,
+		          level_lab_report: project.level_lab_report,
+		          last_opened_at: now,
+		        };
 
-        if (beatFile) {
-          const beatPath = await uploadProjectAudio({
-            userId: authedUser.id,
-            projectId: remoteProject.id,
-            kind: "beat",
-            file: beatFile,
-          });
-
-          patch = {
-            ...patch,
-            beat_file_url: beatPath,
-            beat_filename: beatFile.name,
-          };
-        }
-
-        if (vocalFile) {
-          const vocalPath = await uploadProjectAudio({
-            userId: authedUser.id,
-            projectId: remoteProject.id,
-            kind: "vocal",
-            file: vocalFile,
-          });
-          const vocalVersion: VocalVersion = {
-            id: newClientId(),
-            filename: vocalFile.name,
-            url: vocalPath,
-            uploaded_at: new Date().toISOString(),
-            label: `Vocal ${project.vocal_versions.length + 1}`,
-          };
-          const vocal_versions = [...project.vocal_versions, vocalVersion];
-
-          patch = {
-            ...patch,
-            vocal_versions,
-            current_vocal_index: vocal_versions.length - 1,
-          };
-        }
+	        if (beatFile) {
+            const prepared = await prepareAudioFile({ kind: "beat", file: beatFile });
+            const readyAsset = await uploadPreparedAudioAsset({
+              userId: authedUser.id,
+              projectId: remoteProject.id,
+              asset: prepared.asset,
+              file: prepared.file,
+            });
+            audio_assets = upsertProjectAudioAsset(audio_assets, readyAsset);
+	          patch = { ...patch, audio_assets };
+	        }
+	
+	        if (vocalFile) {
+            const prepared = await prepareAudioFile({ kind: "vocal", file: vocalFile });
+            const readyAsset = await uploadPreparedAudioAsset({
+              userId: authedUser.id,
+              projectId: remoteProject.id,
+              asset: prepared.asset,
+              file: prepared.file,
+            });
+            audio_assets = upsertProjectAudioAsset(audio_assets, readyAsset);
+	          patch = { ...patch, audio_assets };
+	        }
 
 	        const saved = await saveProjectPatch(remoteProject.id, patch);
 	        setActiveProject(saved);
@@ -1146,7 +734,7 @@ export default function SandboxPage() {
 	        setShowSignUpPrompt(false);
 	        showBanner("Chain saved.");
       } catch {
-        showBanner("MimiQ could not save this chain yet. Try again.");
+        showBanner("mimiq could not save this chain yet. Try again.");
         throw new Error("Save failed");
       } finally {
         setSaveBusy(false);
@@ -1171,6 +759,8 @@ export default function SandboxPage() {
 	      project,
 	      saveBusy,
 	      saveUserPrefs,
+	      selectedBeatAssetId,
+	      selectedChainAssetId,
       setActiveProject,
       showBanner,
       vocalFile,
@@ -1241,11 +831,9 @@ export default function SandboxPage() {
         setCursorY(xyPosition.y);
         setHasPendingGenerate(false);
         setAppState("results");
-        setSession({
-          isAnalyzed: true,
-          vocalFileUrl: currentVocal?.url ?? null,
-          beatFileUrl: project.beat_file_url,
-          analysisResult: {
+	        setSession({
+	          isAnalyzed: true,
+	          analysisResult: {
             chain: chainData.chain,
             summary: chainData.summary,
             metrics: chainData.measurements,
@@ -1272,12 +860,10 @@ export default function SandboxPage() {
         setEvaluationIteration(0);
         setHasPendingGenerate(false);
         setAppState("results");
-        setSession({
-          isAnalyzed: true,
-          vocalFileUrl: currentVocal.url,
-          beatFileUrl: project.beat_file_url,
-          analysisResult: null,
-        });
+	        setSession({
+	          isAnalyzed: true,
+	          analysisResult: null,
+	        });
         return;
       }
 
@@ -1293,12 +879,10 @@ export default function SandboxPage() {
       setEvaluationIteration(0);
       setHasPendingGenerate(false);
       setAppState("empty");
-      setSession({
-        isAnalyzed: false,
-        vocalFileUrl: null,
-        beatFileUrl: project.beat_file_url,
-        analysisResult: null,
-      });
+	      setSession({
+	        isAnalyzed: false,
+	        analysisResult: null,
+	      });
     });
 
     return () => cancelAnimationFrame(frame);
@@ -1363,7 +947,11 @@ export default function SandboxPage() {
       result: AnalysisResponse,
       eraId: string,
       xyX: number,
-      xyY: number
+      xyY: number,
+      context?: Pick<
+        GeneratedChain["chain_data"],
+        "sourceAssetId" | "beatAssetId" | "analysisInputKind"
+      >
     ): GeneratedChain => ({
       id: newClientId(),
       chain_data: {
@@ -1373,6 +961,11 @@ export default function SandboxPage() {
         measurements: result.metrics,
         xyPosition: result.xyPosition ?? { x: xyX, y: xyY },
         analysis_version: result.analysis_version,
+        ...(context?.sourceAssetId ? { sourceAssetId: context.sourceAssetId } : {}),
+        ...(context?.beatAssetId ? { beatAssetId: context.beatAssetId } : {}),
+        ...(context?.analysisInputKind
+          ? { analysisInputKind: context.analysisInputKind }
+          : {}),
         fallback_used: result.fallback_used,
         audio_service_status: result.audio_service_status,
       },
@@ -1414,11 +1007,15 @@ export default function SandboxPage() {
 	      result: AnalysisResponse,
 	      eraId: string,
       xyX: number,
-      xyY: number
+      xyY: number,
+      context?: Pick<
+        GeneratedChain["chain_data"],
+        "sourceAssetId" | "beatAssetId" | "analysisInputKind"
+      >
     ) => {
       if (!project) return;
 
-      const generated = buildGeneratedChain(result, eraId, xyX, xyY);
+      const generated = buildGeneratedChain(result, eraId, xyX, xyY, context);
       setActiveGeneratedChainId(generated.id);
       setChainFitGood(false);
       setCachedAnalysisProvenance(provenanceFromResult(result));
@@ -1473,7 +1070,16 @@ export default function SandboxPage() {
 	          analysisResult: result,
 	          currentXyPosition: result.xyPosition,
 	        });
-	        void persistGeneratedResult(result, eraId, nextX, nextY);
+	        const savedChainContext =
+	          project?.generated_chains
+	            .filter(isGeneratedChain)
+	            .find((entry) => entry.id === activeGeneratedChainId)
+	            ?.chain_data;
+	        void persistGeneratedResult(result, eraId, nextX, nextY, {
+	          sourceAssetId: savedChainContext?.sourceAssetId,
+	          beatAssetId: savedChainContext?.beatAssetId,
+	          analysisInputKind: savedChainContext?.analysisInputKind,
+	        });
 	      } catch {
 	        showBanner("Failed to regenerate chain. Try again.");
 	      } finally {
@@ -1483,10 +1089,12 @@ export default function SandboxPage() {
 	    [
 	      cachedAnalysisProvenance,
 	      cachedMetrics,
+	      activeGeneratedChainId,
 	      daw,
 	      mic,
 	      persistGeneratedResult,
 	      plugins,
+	      project,
 	      setSession,
 	      showBanner,
 	    ]
@@ -1497,7 +1105,10 @@ export default function SandboxPage() {
       .filter(isGeneratedChain)
       .find((entry) => entry.id === activeGeneratedChainId);
 
-    return saved?.chain_data.measured_fit === "good";
+    return (
+      saved?.chain_data.measured_fit === "good" &&
+      hasMeasuredProvenance(provenanceFromChainData(saved.chain_data))
+    );
   }, [activeGeneratedChainId, project]);
 
   const handleEnterEditMode = useCallback(() => {
@@ -1546,8 +1157,9 @@ export default function SandboxPage() {
     }
 
     const result = editState.evaluationResult;
-    const measuredFit = result?.measured_fit ?? "unknown";
-    const fitGood = measuredFit === "good";
+    const measuredFit = measuredFitForProvenance(result?.measured_fit, cachedAnalysisProvenance);
+    const fitGood =
+      measuredFit === "good" && hasMeasuredProvenance(cachedAnalysisProvenance);
     const evaluationSummary =
       result?.overall ?? "Saved without a measured fit audit.";
     const iterationCount = Math.max(evaluationIteration, fitGood || result ? 1 : 0);
@@ -1585,8 +1197,9 @@ export default function SandboxPage() {
     closeEditMode();
     showBanner(fitGood ? "Measured fit saved." : "Chain changes saved.");
   }, [
-    activeGeneratedChainId,
-    closeEditMode,
+	    activeGeneratedChainId,
+	    cachedAnalysisProvenance,
+	    closeEditMode,
     editState.editedChain,
     editState.evaluationResult,
     evaluationIteration,
@@ -1606,7 +1219,7 @@ export default function SandboxPage() {
     }
 
     if (!cachedMetrics) {
-      showBanner("MimiQ needs vocal measurements before evaluating this chain.");
+      showBanner("mimiq needs vocal measurements before evaluating this chain.");
       return;
     }
 
@@ -1623,7 +1236,9 @@ export default function SandboxPage() {
       });
 
       setEvaluationIteration(nextIteration);
-      setChainFitGood(result.measured_fit === "good");
+      setChainFitGood(
+        result.measured_fit === "good" && hasMeasuredProvenance(cachedAnalysisProvenance)
+      );
       setEditState((state) => ({
         ...state,
         isDirty: false,
@@ -1639,7 +1254,7 @@ export default function SandboxPage() {
         isDirty: false,
         evaluating: false,
         evaluationResult: {
-          overall: "MimiQ could not complete the chain audit.",
+          overall: "mimiq could not complete the chain audit.",
           issues: [
             {
               severity: "warning",
@@ -1652,13 +1267,14 @@ export default function SandboxPage() {
           strengths: [],
           measured_fit: "unknown",
           flags: ["evaluation_request_failed"],
-          explanation: "The chain audit did not complete, so MimiQ cannot label the edit as measured improvement.",
+          explanation: "The chain audit did not complete, so mimiq cannot label the edit as measured improvement.",
         },
         feedbackPanelOpen: true,
       }));
     }
   }, [
     activeEra.id,
+    cachedAnalysisProvenance,
     cachedMetrics,
     daw,
     editState.editedChain,
@@ -1709,222 +1325,99 @@ export default function SandboxPage() {
 	    ]
 	  );
 
-  /* ── File handling ── */
-  const handleVocalSelect = useCallback(
-    async (file: File) => {
-      /* Client-side size check */
-      if (file.size > MAX_FILE_SIZE) {
-        setUploadError("File exceeds 20 MB limit. Try a shorter clip.");
-        return;
-      }
-      setUploadError(null);
-      setVocalFile(file);
-      setAppState("analyzing");
-      const MIN_ANALYZE_MS = 2600;
-      const minDelay = new Promise<void>((resolve) =>
-        setTimeout(resolve, MIN_ANALYZE_MS)
-      );
+  const handleSelectedAssetAnalyze = useCallback(async () => {
+    const asset =
+      getProjectAudioAssets(project).find((item) => item.id === selectedChainAssetId) ??
+      getPrimaryVocalAsset(project) ??
+      getFullSongAsset(project);
+    const beatAsset =
+      getProjectAudioAssets(project).find((item) => item.id === selectedBeatAssetId) ??
+      getPrimaryBeatAsset(project);
+
+    if (!asset || !project) {
+      setUploadError("Select or upload a vocal or full song in project audio.");
+      return;
+    }
+
+    setUploadError(null);
+    setAppState("analyzing");
+    const MIN_ANALYZE_MS = 2600;
+    const minDelay = new Promise<void>((resolve) =>
+      setTimeout(resolve, MIN_ANALYZE_MS)
+    );
+
+    try {
+      const [result] = await Promise.all([
+        callAnalyze({
+          projectId: project.id,
+          vocalAssetId: asset.id,
+          beatAssetId: beatAsset?.id ?? null,
+          daw: daw || "Logic Pro",
+          mic,
+          plugins,
+          eraId: activeEra.id,
+        }),
+        minDelay,
+      ]);
+
+      setChain(result.chain);
+      setEngineerNote(result.engineer_note ?? null);
+      setInsights(formatInsights(result.metrics));
+      setCachedMetrics(result.metrics);
+      setCachedAnalysisProvenance(provenanceFromResult(result));
+      setCursorX(result.xyPosition.x);
+      setCursorY(result.xyPosition.y);
+      setHasPendingGenerate(false);
 
       try {
-        let clientMetrics: Partial<AudioMetrics> | undefined;
-        try {
-          clientMetrics = await computeClientMetrics(file);
-        } catch (metricError) {
-          console.warn("[sandbox] Client-side metric calculation failed.", metricError);
-        }
-
-        let beatForAnalysis = beatFile;
-
-        if (!beatForAnalysis && project?.beat_file_url) {
-          beatForAnalysis = await downloadProjectAudio(
-            project.beat_file_url,
-            project.beat_filename ?? "project-beat.wav"
-          );
-        }
-
-        const [result] = await Promise.all([
-          callAnalyze({
-            vocalFile: file,
-            beatFile: beatForAnalysis,
-            daw: daw || "Logic Pro",
-            mic,
-            plugins,
-            eraId: activeEra.id,
-            clientMetrics,
-          }),
-          minDelay,
-        ]);
-
-        setChain(result.chain);
-        setEngineerNote(result.engineer_note ?? null);
-        setInsights(formatInsights(result.metrics));
-        setCachedMetrics(result.metrics);
-        setCachedAnalysisProvenance(provenanceFromResult(result));
-        setCursorX(result.xyPosition.x);
-        setCursorY(result.xyPosition.y);
-        setHasPendingGenerate(false);
-
-        const localVocalUrl = URL.createObjectURL(file);
-        const localBeatUrl = beatFile
-          ? URL.createObjectURL(beatFile)
-          : project?.beat_file_url ?? null;
-        let storedVocalUrl = localVocalUrl;
-
-        if (project) {
-          try {
-	            const generated = buildGeneratedChain(
-	              result,
-	              activeEra.id,
-	              result.xyPosition.x,
-	              result.xyPosition.y
-	            );
-	            setActiveGeneratedChainId(generated.id);
-	            setChainFitGood(false);
-	            setEvaluationIteration(0);
-	            const patch: ProjectPatch = {
-	              generated_chains: [generated, ...project.generated_chains],
-	            };
-
-            if (user && !isLocalProject(project)) {
-              storedVocalUrl = await uploadProjectAudio({
-                userId: user.id,
-                projectId: project.id,
-                kind: "vocal",
-                file,
-              });
-
-              const vocalVersion: VocalVersion = {
-                id: newClientId(),
-                filename: file.name,
-                url: storedVocalUrl,
-                uploaded_at: new Date().toISOString(),
-                label: `Vocal ${project.vocal_versions.length + 1}`,
-              };
-              patch.vocal_versions = [...project.vocal_versions, vocalVersion];
-              patch.current_vocal_index = project.vocal_versions.length;
-            }
-
-            await persistProjectPatch(patch);
-          } catch {
-            showBanner("Analysis finished, but the project file did not save yet.");
-          }
-        }
-
-        setSession({
-          isAnalyzed: true,
-          vocalFileUrl: storedVocalUrl,
-          beatFileUrl: localBeatUrl,
-          analysisResult: result,
+	        const generated = buildGeneratedChain(
+	          result,
+	          activeEra.id,
+	          result.xyPosition.x,
+	          result.xyPosition.y,
+	          {
+	            sourceAssetId: asset.id,
+	            beatAssetId: beatAsset?.id ?? null,
+	            analysisInputKind:
+	              asset.kind === "full_song" ? "full_song" : "vocal",
+	          }
+	        );
+        setActiveGeneratedChainId(generated.id);
+        setChainFitGood(false);
+        setEvaluationIteration(0);
+        await persistProjectPatch({
+          generated_chains: [generated, ...project.generated_chains],
         });
-
-        setAppState("results");
-      } catch (err: unknown) {
-        await minDelay;
-        const apiErr = err as AnalysisError;
-        if (apiErr?.error === "audio_service_unavailable") {
-          showBanner(
-            "Analysis unavailable right now. You can still explore the XY pad for general guidance."
-          );
-          setAppState("results");
-        } else {
-          showBanner(
-            apiErr?.message || "Something went wrong during analysis."
-          );
-          setAppState("empty");
-          setVocalFile(null);
-        }
+      } catch {
+        showBanner("Analysis finished, but the generated chain did not save yet.");
       }
-    },
-    [
-      beatFile,
-      project,
-      activeEra.id,
-      showBanner,
-      daw,
-      mic,
-      plugins,
-      buildGeneratedChain,
-      persistProjectPatch,
-      setSession,
-      user,
-    ]
-  );
 
-  const handleVocalInput = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleVocalSelect(file);
-    },
-    [handleVocalSelect]
-  );
-
-  const handleBeatInput = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > MAX_FILE_SIZE) {
-        setUploadError("Beat file exceeds 20 MB limit.");
-        return;
-      }
-      setUploadError(null);
-      setBeatFile(file);
-
-      if (project) {
-        try {
-          if (user && !isLocalProject(project)) {
-            const path = await uploadProjectAudio({
-              userId: user.id,
-              projectId: project.id,
-              kind: "beat",
-              file,
-            });
-
-            await persistProjectPatch({
-              beat_file_url: path,
-              beat_filename: file.name,
-            });
-
-            setSession({
-              beatFileUrl: path,
-            });
-            return;
-          }
-
-          const localBeatUrl = URL.createObjectURL(file);
-
-          await persistProjectPatch({
-            beat_file_url: null,
-            beat_filename: file.name,
-          });
-
-          setSession({
-            beatFileUrl: localBeatUrl,
-          });
-        } catch {
-          showBanner("Beat selected, but it did not save to the project yet.");
-        }
-      }
+      setSession({
+        isAnalyzed: true,
+        analysisResult: result,
+      });
+      setAppState("results");
+    } catch (err: unknown) {
+      await minDelay;
+      const apiErr = err as AnalysisError;
+      showBanner(
+        apiErr?.message || "Something went wrong during analysis."
+      );
+      setAppState("empty");
     }
-  }, [persistProjectPatch, project, setSession, showBanner, user]);
-
-  /* ── Drag and drop ── */
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    setDragOver(true);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback(
-    (e: DragEvent) => {
-      e.preventDefault();
-      setDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleVocalSelect(file);
-    },
-    [handleVocalSelect]
-  );
+  }, [
+    activeEra.id,
+    buildGeneratedChain,
+    daw,
+    mic,
+    persistProjectPatch,
+    plugins,
+    project,
+    selectedBeatAssetId,
+    selectedChainAssetId,
+    setSession,
+    showBanner,
+  ]);
 
   /* ── Skip upload — explore without audio ── */
   const handleSkip = useCallback(async () => {
@@ -1960,18 +1453,21 @@ export default function SandboxPage() {
       setCursorY(result.xyPosition.y);
       setHasPendingGenerate(false);
       void persistGeneratedResult(
-        result,
-        activeEra.id,
-        result.xyPosition.x,
-        result.xyPosition.y
-      );
+	        result,
+	        activeEra.id,
+	        result.xyPosition.x,
+	        result.xyPosition.y,
+	        {
+	          sourceAssetId: null,
+	          beatAssetId: null,
+	          analysisInputKind: "fallback",
+	        }
+	      );
 
-      setSession({
-        isAnalyzed: true,
-        vocalFileUrl: null,
-        beatFileUrl: null,
-        analysisResult: result,
-      });
+	      setSession({
+	        isAnalyzed: true,
+	        analysisResult: result,
+	      });
 
       setAppState("results");
     } catch {
@@ -2180,13 +1676,80 @@ export default function SandboxPage() {
     isEditing && editState.editedChain ? editState.editedChain : chain;
   const showMeasuredFitBadge =
     !editState.isDirty &&
+    hasMeasuredProvenance(cachedAnalysisProvenance) &&
     (chainFitGood || editState.evaluationResult?.measured_fit === "good");
-  const currentVocal = project ? getCurrentVocal(project) : null;
-  const rawAudioUrl = sessionVocalFileUrl ?? currentVocal?.url ?? null;
-  const processedAudioUrl = sessionProcessedFileUrl ?? project?.stem_split_url ?? null;
-  const metricReadouts = useMemo(
-    () => buildMetricReadouts(insights, cachedMetrics, displayedChain),
-    [cachedMetrics, displayedChain, insights]
+	  const currentVocal = project ? getCurrentVocal(project) : null;
+    const projectAudioAssets = getProjectAudioAssets(project);
+    const selectedChainAsset =
+      projectAudioAssets.find((asset) => asset.id === selectedChainAssetId) ??
+      getPrimaryVocalAsset(project) ??
+      getFullSongAsset(project);
+    const selectedBeatAsset =
+      projectAudioAssets.find((asset) => asset.id === selectedBeatAssetId) ??
+      getPrimaryBeatAsset(project);
+    const rawAudioUrl = selectedPlaybackUrl;
+    const processedAudioUrl = null;
+    const hasBeatContext = Boolean(selectedBeatAsset);
+    const hasVocalChainAsset =
+      selectedChainAsset?.kind === "full_song" || selectedChainAsset?.kind === "vocal";
+    const playbackAssetId = selectedChainAsset?.id ?? null;
+    const playbackAssetKind = selectedChainAsset?.kind ?? null;
+    const playbackAssetFilename = selectedChainAsset?.filename ?? null;
+    const playbackAssetMimeType = selectedChainAsset?.mimeType ?? "audio/mpeg";
+    const playbackAssetSize = selectedChainAsset?.size ?? 0;
+    const playbackAssetDuration = selectedChainAsset?.duration ?? null;
+    const playbackAssetStoragePath = selectedChainAsset?.storagePath ?? null;
+    const playbackAssetCreatedAt = selectedChainAsset?.createdAt ?? new Date(0).toISOString();
+    const playbackAssetStatus = selectedChainAsset?.status ?? "ready";
+    const playbackAssetError = selectedChainAsset?.error ?? null;
+    useEffect(() => {
+      let alive = true;
+
+      const playbackAsset: ProjectAudioAsset | null =
+        playbackAssetId && playbackAssetKind && playbackAssetFilename
+          ? {
+              id: playbackAssetId,
+              kind: playbackAssetKind,
+              filename: playbackAssetFilename,
+              mimeType: playbackAssetMimeType,
+              size: playbackAssetSize,
+              duration: playbackAssetDuration,
+              storagePath: playbackAssetStoragePath,
+              createdAt: playbackAssetCreatedAt,
+              status: playbackAssetStatus,
+              error: playbackAssetError,
+            }
+          : null;
+
+      void getAssetPlaybackUrl(playbackAsset).then((url) => {
+        if (alive) setSelectedPlaybackUrl(url);
+      });
+
+      return () => {
+        alive = false;
+      };
+    }, [
+      playbackAssetCreatedAt,
+      playbackAssetDuration,
+      playbackAssetError,
+      playbackAssetFilename,
+      playbackAssetId,
+      playbackAssetKind,
+      playbackAssetMimeType,
+      playbackAssetSize,
+      playbackAssetStatus,
+      playbackAssetStoragePath,
+    ]);
+	  const metricReadouts = useMemo(
+    () =>
+      buildMetricReadouts(
+        insights,
+        cachedMetrics,
+        displayedChain,
+        activeEra.id,
+        cachedAnalysisProvenance
+      ),
+    [cachedAnalysisProvenance, cachedMetrics, displayedChain, insights, activeEra.id]
   );
   const assistantModel = useMemo(
     () =>
@@ -2238,16 +1801,52 @@ export default function SandboxPage() {
           ───────────────────────────────────────────────── */}
       <Sidebar
         activePage="sandbox"
-        activeEra={activeEra}
-        onEraChange={handleEraChange}
         savedCount={0}
         dimNavItems={isEditing}
-        uploadedVocalName={vocalFile?.name ?? null}
-        onVocalUpload={handleVocalSelect}
-        onVocalClear={handleRemoveVocal}
       />
 
-      <div className={styles.studioContent}>
+      <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minWidth: 0, overflow: "hidden" }}>
+        <header className="globalToolHeader">
+          <div className="globalToolHeaderTitle">
+            <span>Studio</span>
+            <h1>Chain Lab</h1>
+          </div>
+          <div className="globalToolHeaderPickers">
+	            <AudioAssetPicker
+	              label="Vocal"
+	              value={selectedChainAsset?.kind === "vocal" ? selectedChainAsset.id : null}
+	              onChange={setSelectedChainAssetId}
+	              allowedKinds={["vocal"]}
+              emptyLabel="No vocal"
+              warning="Best results need isolated vocal."
+              variant="compact"
+            />
+            <AudioAssetPicker
+              label="Beat"
+              value={selectedBeatAsset?.id ?? selectedBeatAssetId}
+              onChange={setSelectedBeatAssetId}
+              allowedKinds={["beat"]}
+              emptyLabel="No beat"
+              variant="compact"
+            />
+            <div style={{ color: "var(--fg-muted)", fontSize: 13 }}>OR</div>
+	            <AudioAssetPicker
+	              label="Song"
+	              value={selectedChainAsset?.kind === "full_song" ? selectedChainAsset.id : null}
+	              onChange={setSelectedChainAssetId}
+              allowedKinds={["full_song"]}
+              emptyLabel="No song"
+              variant="compact"
+            />
+          </div>
+        </header>
+
+        <ToolLockedOverlay
+        key={project ? `${project.id}:chain` : "chain"}
+        locked={!hasVocalChainAsset}
+        className={styles.studioContent}
+        momentKey={project ? `${project.id}:chain` : "chain"}
+      >
 	        <WorkspaceMetricsBar
 	          readouts={metricReadouts}
 	          busyLabel={
@@ -2286,9 +1885,6 @@ export default function SandboxPage() {
 
           <section
             className={styles.chainCanvas}
-            onDragOver={appState === "empty" ? handleDragOver : undefined}
-            onDragLeave={appState === "empty" ? handleDragLeave : undefined}
-            onDrop={appState === "empty" ? handleDrop : undefined}
           >
             {vocalFile && appState !== "empty" && (
               <div className={styles.fileChip}>
@@ -2304,66 +1900,38 @@ export default function SandboxPage() {
             )}
 
             {appState === "empty" && (
-              <div className={styles.studioDropState}>
-                <div
-                  className={`${styles.uploadZone} ${
-                    dragOver ? styles.uploadZoneDragover : ""
-                  }`}
-                  onClick={() => vocalInputRef.current?.click()}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  role="button"
-                  tabIndex={0}
-                  aria-label="Upload vocal file"
-                >
-                  <AnimatedDashedBorder />
-                  <UploadArrowIcon className={styles.uploadIcon} />
-                  <span className={styles.uploadPrimary}>Drop your vocal here</span>
-                  <span className={styles.uploadSecondary}>
-                    .wav or .mp3 · up to 60 seconds
-                  </span>
+              <>
+                <div style={{ position: "relative", zIndex: 1, opacity: 0.3, pointerEvents: "none" }}>
+                  <VisualVocalChain
+                    chain={[
+                      { step: 1, tool: "Gain", action: "Reduce input gain by -2 dB", reason: "Headroom" },
+                      { step: 2, tool: "De-Esser", action: "Tame sibilance at 6kHz", reason: "Harshness" },
+                      { step: 3, tool: "EQ", action: "High-pass at 85Hz", reason: "Remove rumble" },
+                      { step: 4, tool: "Compressor", action: "4:1 fast attack", reason: "Dynamic control" },
+                      { step: 5, tool: "EQ", action: "Boost high shelf by +1.5 dB", reason: "Air" }
+                    ]}
+                    mode="view"
+                  />
+                </div>
+
+                <div className={styles.studioDropState} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
                   {uploadError && (
                     <span className={styles.uploadErrorInline}>{uploadError}</span>
                   )}
-                </div>
-                <input
-                  ref={vocalInputRef}
-                  type="file"
-                  accept=".wav,.mp3,audio/wav,audio/mpeg"
-                  className={styles.hiddenInput}
-                  onChange={handleVocalInput}
-                />
+                  <button
+                    type="button"
+                    className={styles.skipLink}
+                    onClick={() => void handleSelectedAssetAnalyze()}
+                    disabled={!selectedChainAsset}
+                  >
+                    Generate chain from selected asset
+                  </button>
 
-                <div
-                  className={styles.beatUpload}
-                  onClick={() => beatInputRef.current?.click()}
-                  role="button"
-                  tabIndex={0}
-                  aria-label="Upload beat file (optional)"
-                >
-                  <AnimatedDashedBorder />
-                  <UploadArrowIcon className={styles.uploadIcon} />
-                  <span className={styles.beatUploadText}>
-                    {beatFile
-                      ? `Beat: ${beatFile.name}`
-                      : project?.beat_filename
-                        ? `Beat: ${project.beat_filename}`
-                        : "Add your beat too (optional)"}
-                  </span>
+                  <button className={styles.skipLink} onClick={handleSkip}>
+                    Skip upload - explore without audio
+                  </button>
                 </div>
-                <input
-                  ref={beatInputRef}
-                  type="file"
-                  accept=".wav,.mp3,audio/wav,audio/mpeg"
-                  className={styles.hiddenInput}
-                  onChange={handleBeatInput}
-                />
-
-                <button className={styles.skipLink} onClick={handleSkip}>
-                  Skip upload - explore without audio
-                </button>
-              </div>
+              </>
             )}
 
             {appState === "analyzing" && (
@@ -2406,6 +1974,10 @@ export default function SandboxPage() {
                 evaluating={editState.evaluating}
                 evaluationResult={editState.evaluationResult}
                 feedbackPanelOpen={editState.feedbackPanelOpen}
+                displayedMeasuredFit={measuredFitForProvenance(
+                  editState.evaluationResult?.measured_fit,
+                  cachedAnalysisProvenance
+                )}
                 currentGenre={activeEra.id}
                 currentDaw={daw || "Logic Pro"}
                 measuredFit={
@@ -2445,14 +2017,15 @@ export default function SandboxPage() {
           onPadPointerUp={handlePadPointerUp}
         />
 
-        <AudioTransport
-          rawUrl={rawAudioUrl}
-          processedUrl={processedAudioUrl}
-          trackName={currentVocal?.label ?? project?.name ?? "Lead Vocal"}
-          trackLabel={sessionBeatFileUrl ? "vocal + beat context" : "lead vocal"}
+	        <AudioTransport
+	          rawUrl={rawAudioUrl}
+	          processedUrl={processedAudioUrl}
+	          trackName={selectedChainAsset?.filename ?? currentVocal?.label ?? project?.name ?? "Lead Vocal"}
+	          trackLabel={hasBeatContext ? "vocal + beat context" : "lead vocal"}
           lufs={metricReadouts[0]?.value}
           onPulseChange={setAudioPulse}
         />
+      </ToolLockedOverlay>
       </div>
 
       {/* ─────────────────────────────────────────────────
@@ -2468,7 +2041,7 @@ export default function SandboxPage() {
         onAuthed={handleAuthedForSave}
         initialMode="signup"
         title="Save your chain - create a free account"
-        text="Keep this vocal chain in your MimiQ projects."
+        text="Keep this vocal chain in your mimiq projects."
         subtext="Your chain will be saved automatically after signing up."
         nextPath="/sandbox"
         pendingAuthKey={SAVE_AFTER_AUTH_KEY}
@@ -2538,6 +2111,14 @@ function WorkspaceMetricsBar({
             <strong className={styles.metricValue}>
               <AnimatedMetricValue value={readout.value} />
             </strong>
+            {readout.statusLabel && (
+              <div
+                className={styles.metricStatusLabel}
+                data-color={readout.statusColor}
+              >
+                {readout.statusLabel}
+              </div>
+            )}
           </div>
           <em className={styles.metricSource}>{readout.source}</em>
         </div>

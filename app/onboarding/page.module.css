@@ -1,8 +1,9 @@
 /* ============================================================
-   MimiQ Onboarding
+   mimiq Onboarding
    ============================================================ */
 
 .wrapper {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -10,6 +11,21 @@
   min-height: 100vh;
   min-height: 100dvh;
   padding: 48px 24px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
+    var(--bg-base);
+}
+
+.wrapper::before {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.14;
+  background-image: var(--studio-noise);
+  background-size: 6px 6px;
+  mix-blend-mode: overlay;
 }
 
 /* ── Progress dots ── */
@@ -122,7 +138,8 @@
   justify-content: center;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  border-top-color: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
   cursor: pointer;
   transition: all 200ms ease;
   user-select: none;
@@ -164,68 +181,60 @@
 .eraCard {
   position: relative;
   width: 220px;
-  height: 140px;
-  border: none;
-  background: transparent;
+  height: 92px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-top-color: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.01)),
+    var(--bg-surface);
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  transition: transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: var(--studio-panel-shadow);
+  transition:
+    transform 220ms var(--ease-spring),
+    border-color 180ms var(--ease-snap),
+    background 180ms var(--ease-snap);
   user-select: none;
 }
 
 .eraCard::before {
-  content: '';
+  content: "";
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 60px;
-  height: 60px;
-  transform: translate(-50%, -50%);
-  background: var(--card-accent);
-  border-radius: 50%;
-  filter: blur(30px);
-  opacity: 0.1;
-  transition: all 400ms ease;
+  top: 0;
+  right: 12px;
+  left: 12px;
+  height: 1px;
+  background: color-mix(in srgb, var(--card-accent) 36%, transparent);
+  opacity: 0.42;
   pointer-events: none;
-  z-index: 0;
-}
-
-@keyframes auraBreathe {
-  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; filter: blur(30px); }
-  50% { transform: translate(-50%, -50%) scale(1.6); opacity: 0.6; filter: blur(40px); }
-  100% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; filter: blur(30px); }
 }
 
 .eraCard:hover {
-  transform: scale(1.1) translateY(-6px);
-  background: transparent;
-  border: none;
-}
-
-.eraCard:hover::before {
-  opacity: 0.5;
-  filter: blur(40px);
-  animation: auraBreathe 2.5s ease-in-out infinite;
+  transform: translateY(-3px);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card-accent) 5%, rgba(255, 255, 255, 0.026)), rgba(255, 255, 255, 0.01)),
+    var(--bg-surface);
+  border-color: color-mix(in srgb, var(--card-accent) 34%, rgba(255, 255, 255, 0.08));
 }
 
 .eraCardSelected {
-  transform: scale(1.15) translateY(-8px);
-  background: transparent;
-  border: none;
+  transform: translateY(-4px);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card-accent) 8%, rgba(255, 255, 255, 0.026)), rgba(255, 255, 255, 0.012)),
+    var(--bg-surface);
+  border-color: color-mix(in srgb, var(--card-accent) 44%, rgba(255, 255, 255, 0.1));
 }
 
 .eraCardSelected::before {
-  opacity: 0.7;
-  filter: blur(50px);
-  animation: auraBreathe 2s ease-in-out infinite;
+  opacity: 1;
 }
 
 .eraCardSelected:hover {
-  transform: scale(1.15) translateY(-8px);
-  background: transparent;
+  transform: translateY(-4px);
 }
 
 /* Change 1: Inter 500 lowercase — confident, quiet label */
@@ -233,9 +242,9 @@
   position: relative;
   text-align: center;
   font-family: var(--font-body);
-  font-size: 16px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
   text-transform: lowercase;
   color: var(--card-accent);
   z-index: 1;
@@ -245,12 +254,12 @@
 
 .eraCard:hover .eraName {
   color: var(--text-primary);
-  text-shadow: 0 0 12px var(--card-accent), 0 0 24px color-mix(in srgb, var(--card-accent) 50%, transparent);
+  text-shadow: none;
 }
 
 .eraCardSelected .eraName {
   color: var(--text-primary);
-  text-shadow: 0 0 16px var(--card-accent), 0 0 32px var(--card-accent);
+  text-shadow: none;
   font-weight: 600;
 }
 

@@ -83,7 +83,7 @@ export default function EntryPage() {
   }, [destination, router, transitionComplete]);
 
   return (
-    <main className={styles.layout} aria-label="Entering MimiQ">
+    <main className={styles.layout} aria-label="Entering mimiq">
       <EntryTransitionOverlay />
     </main>
   );

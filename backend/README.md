@@ -1,4 +1,4 @@
-# MimiQ Audio Backend
+# mimiq Audio Backend
 
 FastAPI + librosa audio analysis service.
 

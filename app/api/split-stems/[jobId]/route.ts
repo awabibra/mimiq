@@ -1,28 +1,10 @@
 import { NextResponse } from "next/server";
+import type { StemSplitJobResponse } from "@/lib/types";
 
-interface StemJobResponse {
-  job_id: string;
-  status: "queued" | "processing" | "complete" | "failed";
-  created_at: string;
-  updated_at: string;
-  source_filename: string;
-  message?: string;
-  error?: string;
-  stems?: Record<string, { name: string; filename: string; url: string }>;
-}
-
-async function readServiceError(res: Response) {
-  const text = await res.text().catch(() => "");
-  try {
-    const data = JSON.parse(text) as { detail?: string; message?: string };
-    return data.message || data.detail || "Stem split job is unavailable.";
-  } catch {
-    return text || "Stem split job is unavailable.";
+function withLocalStemUrls(data: StemSplitJobResponse): StemSplitJobResponse {
+  if (!data.stems) {
+    return data;
   }
-}
-
-function withLocalStemUrls(data: StemJobResponse): StemJobResponse {
-  if (!data.stems) return data;
 
   return {
     ...data,
@@ -36,6 +18,16 @@ function withLocalStemUrls(data: StemJobResponse): StemJobResponse {
       ])
     ),
   };
+}
+
+async function readServiceError(res: Response) {
+  const text = await res.text().catch(() => "");
+  try {
+    const data = JSON.parse(text) as { detail?: string; message?: string };
+    return data.message || data.detail || "Stem split job is unavailable.";
+  } catch {
+    return text || "Stem split job is unavailable.";
+  }
 }
 
 export async function GET(
@@ -66,5 +58,6 @@ export async function GET(
     );
   }
 
-  return NextResponse.json(withLocalStemUrls((await res.json()) as StemJobResponse));
+  const payload = (await res.json()) as StemSplitJobResponse;
+  return NextResponse.json(withLocalStemUrls(payload));
 }

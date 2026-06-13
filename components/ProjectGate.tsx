@@ -8,6 +8,7 @@ import {
   rehydrateActiveProject,
   useProject,
 } from "@/lib/useProject";
+import { Logo } from "@/components/ui/logo";
 
 function LoadingScreen() {
   return (
@@ -20,15 +21,7 @@ function LoadingScreen() {
         color: "var(--text-primary, #f5f5f7)",
       }}
     >
-      <span
-        style={{
-          fontSize: "14px",
-          fontWeight: 500,
-          letterSpacing: 0,
-        }}
-      >
-        MimiQ
-      </span>
+      <Logo className="text-sm font-medium tracking-normal" />
     </div>
   );
 }

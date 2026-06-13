@@ -7,6 +7,10 @@ import type {
   PocketZone,
   SpectralData,
 } from "@/lib/types";
+import {
+  assetResolutionResponse,
+  resolveProjectAssetFile,
+} from "@/lib/serverProjectAudio";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MIN_FREQ = 20;
@@ -319,13 +323,48 @@ function fileFromForm(form: FormData, ...keys: string[]) {
 
 async function handleFormAnalysis(req: NextRequest) {
   const form = await req.formData();
-  const vocalFile = fileFromForm(form, "vocalFile", "vocal");
-  const beatFile = fileFromForm(form, "beatFile", "beat");
+  let vocalFile = fileFromForm(form, "vocalFile", "vocal");
+  let beatFile = fileFromForm(form, "beatFile", "beat");
   const daw = (form.get("daw") as string) || "Logic Pro";
   const genre = (form.get("genre") as string) || "Rap";
   const vocalSource = (form.get("vocalSource") as string) || null;
   const beatSource = (form.get("beatSource") as string) || null;
   const vocalVersionId = (form.get("vocalVersionId") as string) || null;
+  const projectId = (form.get("projectId") as string) || null;
+  const vocalAssetId = (form.get("vocalAssetId") as string) || null;
+  const beatAssetId = (form.get("beatAssetId") as string) || null;
+  const fullSongAssetId = (form.get("fullSongAssetId") as string) || null;
+
+  try {
+    const fullSongAsset = await resolveProjectAssetFile({
+      req,
+      projectId,
+      assetId: fullSongAssetId,
+      allowedKinds: ["full_song"],
+      label: "Full song",
+    });
+    const vocalAsset = await resolveProjectAssetFile({
+      req,
+      projectId,
+      assetId: fullSongAssetId ? null : vocalAssetId,
+      allowedKinds: ["vocal"],
+      label: "Vocal",
+    });
+    const beatAsset = await resolveProjectAssetFile({
+      req,
+      projectId,
+      assetId: fullSongAssetId ? null : beatAssetId,
+      allowedKinds: ["beat"],
+      label: "Beat",
+    });
+
+    vocalFile = fullSongAsset?.file ?? vocalAsset?.file ?? vocalFile;
+    beatFile = fullSongAsset?.file ?? beatAsset?.file ?? beatFile;
+  } catch (error) {
+    const response = assetResolutionResponse(error);
+    if (response) return response;
+    throw error;
+  }
 
   if (!vocalFile || !beatFile) {
     const missing = [
@@ -385,6 +424,9 @@ async function handleFormAnalysis(req: NextRequest) {
     analysis_version: usedClientSpectrum ? "browser_fft_v1" : "mix_room_v1",
     analyzed_at: new Date().toISOString(),
     vocal_version_id: vocalVersionId,
+    vocal_asset_id: vocalAssetId,
+    beat_asset_id: beatAssetId,
+    full_song_asset_id: fullSongAssetId,
     beat_file_url: beatSource,
     vocal_source: vocalSource,
     beat_source: beatSource,

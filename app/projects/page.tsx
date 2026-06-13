@@ -27,7 +27,6 @@ import {
 } from "@/lib/projects";
 import type { AudioServiceStatus, GeneratedChain, Project } from "@/lib/types";
 import {
-  getCurrentVocal,
   getLatestGeneratedChain,
   useProject,
 } from "@/lib/useProject";
@@ -181,15 +180,12 @@ function provenanceFromChainData(
 }
 
 function toAudioSession(project: Project) {
-  const vocal = getCurrentVocal(project);
   const latestChain = getLatestGeneratedChain(project);
   const chainData = latestChain?.chain_data;
   const xyPosition = chainData?.xyPosition ?? { x: 0.55, y: 0.62 };
   const provenance = provenanceFromChainData(chainData);
 
   return {
-    vocalFileUrl: vocal?.url ?? null,
-    beatFileUrl: project.beat_file_url,
     analysisResult: chainData?.measurements
       ? {
           chain: chainData.chain,
@@ -202,8 +198,7 @@ function toAudioSession(project: Project) {
         }
       : null,
     processedAnalysis: project.level_lab_report,
-    processedFileUrl: project.stem_split_url,
-    isAnalyzed: Boolean(vocal || chainData?.measurements),
+    isAnalyzed: Boolean(chainData?.measurements),
   };
 }
 
@@ -239,8 +234,7 @@ function ProjectsInner() {
     return null;
   }, [projectPrompt, routePrompt]);
   const headerSubtext = subtlePrompt ?? "Select or create a session to continue.";
-  const activeSidebarEra =
-    eras.find((era) => era.id === selectedEraId) ?? defaultEra;
+
   const filteredProjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return projects;
@@ -393,8 +387,6 @@ function ProjectsInner() {
 
       <Sidebar
         activePage="projects"
-        activeEra={activeSidebarEra}
-        onEraChange={(era) => setSelectedEraId(era.id)}
         savedCount={0}
       />
 
@@ -614,7 +606,7 @@ function ProjectsInner() {
 
               <div className={styles.modalHeader}>
                 <h2>New session</h2>
-                <p>Name the project window MimiQ should remember.</p>
+                <p>Name the project window mimiq should remember.</p>
               </div>
 
               <label className={styles.fieldLabel}>

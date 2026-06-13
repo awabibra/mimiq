@@ -8,8 +8,12 @@ import { ProjectGate } from "@/components/ProjectGate";
 import { useStore } from "@/lib/store";
 import { useAudioStore } from "@/lib/useAudioStore";
 import { downloadProjectAudio, saveProjectPatch } from "@/lib/projects";
+import { authHeaders } from "@/lib/apiAuth";
 import { getLatestGeneratedChain, useProject } from "@/lib/useProject";
 import { eras, defaultEra } from "@/lib/eras";
+import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
+import { AudioAssetPicker } from "@/components/AudioAssetPicker";
+import { MobileTabBar } from "@/components/MobileTabBar";
 import styles from "./page.module.css";
 import type { AudioMetrics, LevelLabResponse } from "@/lib/types";
 
@@ -223,8 +227,6 @@ export default function LevelLabPage() {
   const { 
     analysisResult, 
     processedAnalysis, 
-    processedFileUrl,
-    vocalFileUrl,
     setSession 
   } = useAudioStore();
 
@@ -232,9 +234,21 @@ export default function LevelLabPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [typewriterText, setTypewriterText] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [uploadWidgetMode, setUploadWidgetMode] = useState<
-    "open" | "closing" | "mini" | "opening"
-  >("open");
+  
+  const [selectedRawAssetId, setSelectedRawAssetId] = useState<string | null>(null);
+  const [selectedProcessedAssetId, setSelectedProcessedAssetId] = useState<string | null>(null);
+  
+  const rawAudioAsset =
+    project?.audio_assets?.find((a) => a.id === selectedRawAssetId && a.status === "ready") ??
+    project?.audio_assets?.find((a) => (a.kind === "vocal" || a.kind === "full_song") && a.status === "ready") ??
+    null;
+  const processedAudioAsset =
+    project?.audio_assets?.find((a) => a.id === selectedProcessedAssetId && a.status === "ready") ??
+    null;
+
+  // Unlock as soon as there is a raw asset. The processed asset is selected
+  // via the picker above and the Compare button stays disabled until chosen.
+  const isLevelLabUnlocked = Boolean(rawAudioAsset);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Animation states for STATE B
@@ -248,35 +262,39 @@ export default function LevelLabPage() {
     (processedAnalysis as LevelLabResponse | null) ??
     (project?.level_lab_report as LevelLabResponse | null);
 
-  const currentVocal =
-    project?.vocal_versions?.[project.current_vocal_index] ?? null;
-  const rawAudioUrl = currentVocal?.url ?? vocalFileUrl ?? null;
-  const rawFilename = currentVocal?.filename ?? "raw-vocal.wav";
   const rawMetrics: AudioMetrics | LevelLabResponse["rawMetrics"] | null =
     levelLabData?.rawMetrics ??
     analysisResult?.metrics ??
     latestProjectChain?.chain_data.measurements ??
     null;
-  const hasRawVocal = !!rawAudioUrl;
+    
+  const hasRawVocal = !!rawAudioAsset;
   const hasProcessed = !!levelLabData;
-  const processedAudioUrl = processedFileUrl ?? project?.stem_split_url ?? null;
-  const transportTrackName =
-    currentVocal?.label ?? project?.name ?? "Level Lab Monitor";
+
+  const [rawAudioUrl, setRawAudioUrl] = useState<string | null>(null);
+  const [processedAudioUrl, setProcessedAudioUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchUrls = async () => {
+      const { getAssetPlaybackUrl } = await import("@/lib/projectAudio");
+      const rUrl = await getAssetPlaybackUrl(rawAudioAsset);
+      const pUrl = await getAssetPlaybackUrl(processedAudioAsset);
+      if (active) {
+        setRawAudioUrl(rUrl);
+        setProcessedAudioUrl(pUrl);
+      }
+    };
+    fetchUrls();
+    return () => { active = false; };
+  }, [rawAudioAsset, processedAudioAsset]);
+
+  const transportTrackName = rawAudioAsset?.filename ?? project?.name ?? "Level Lab Monitor";
   const levelScore = levelLabData?.sessionScore ?? null;
   const metricStatus = isProcessing ? "Reading" : hasProcessed ? "Ready" : "Waiting";
   const rawMissingMessage =
     "Upload or analyze the raw vocal in Sandbox first. Level Lab needs the original take as the before reference, then it can compare your processed export.";
 
-  const closeUploadWidget = () => {
-    if (isProcessing) return;
-    setUploadWidgetMode("closing");
-    window.setTimeout(() => setUploadWidgetMode("mini"), 320);
-  };
-
-  const openUploadWidget = () => {
-    setUploadWidgetMode("opening");
-    window.setTimeout(() => setUploadWidgetMode("open"), 260);
-  };
 
   // Typewriter effect during processing
   useEffect(() => {
@@ -320,9 +338,8 @@ export default function LevelLabPage() {
     return () => clearInterval(interval);
   }, [scoreVisible, levelLabData?.sessionScore]);
 
-  const saveLevelLabReport = (report: LevelLabResponse, processedFileUrl?: string) => {
+  const saveLevelLabReport = (report: LevelLabResponse) => {
     setSession({
-      processedFileUrl,
       processedAnalysis: report,
     });
 
@@ -335,36 +352,33 @@ export default function LevelLabPage() {
     }
   };
 
-  const handleFileUpload = async (file: File) => {
-    const lowerName = file.name.toLowerCase();
-    if (!lowerName.endsWith(".wav") && !lowerName.endsWith(".mp3")) {
-      setErrorText("Drop a WAV or MP3 processed vocal export.");
-      return;
-    }
-
-    if (!hasRawVocal || !rawAudioUrl) {
+  const handleCompareSelectedAssets = async () => {
+    if (!rawAudioAsset) {
       setErrorText(rawMissingMessage);
       return;
     }
+    if (!processedAudioAsset) {
+      setErrorText("Select a processed export or reference asset.");
+      return;
+    }
 
-    setUploadWidgetMode("open");
     setIsProcessing(true);
     setErrorText(null);
-    const processedFileUrl = URL.createObjectURL(file);
 
     try {
-      const rawFile = await loadAudioFile(rawAudioUrl, rawFilename);
       const formData = new FormData();
-      formData.append("rawFile", rawFile);
-      formData.append("processedFile", file);
+      if (project?.id) formData.append("projectId", project.id);
       if (rawMetrics) {
         formData.append("rawMetrics", JSON.stringify(rawMetrics));
       }
       formData.append("daw", daw || "Logic Pro");
       formData.append("era", activeEra.id);
+      formData.append("rawAssetId", rawAudioAsset.id);
+      formData.append("processedAssetId", processedAudioAsset.id);
 
       const res = await fetch("/api/level-lab", {
         method: "POST",
+        headers: await authHeaders(),
         body: formData,
       });
 
@@ -378,38 +392,14 @@ export default function LevelLabPage() {
         throw new Error("Level Lab response did not include measured deltas.");
       }
 
-      saveLevelLabReport(data, processedFileUrl);
+      saveLevelLabReport(data);
     } catch (e) {
       console.warn("[level-lab] Server review unavailable.", e);
-      URL.revokeObjectURL(processedFileUrl);
       setErrorText(
         e instanceof Error ? e.message : "Level Lab could not analyze that file."
       );
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const onDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const onDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
-    }
-  };
-
-  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFileUpload(e.target.files[0]);
     }
   };
 
@@ -483,11 +473,53 @@ export default function LevelLabPage() {
     <div className={styles.layout}>
       <Sidebar
         activePage="level-lab"
-        activeEra={activeEra}
-        onEraChange={() => {}}
         savedCount={0}
       />
-      <GateScreen>
+      
+      <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minWidth: 0, overflow: "hidden" }}>
+        <header className="globalToolHeader">
+          <div className="globalToolHeaderTitle">
+            <span>Validation</span>
+            <h1>E-Val</h1>
+          </div>
+          <div className="globalToolHeaderPickers">
+            <AudioAssetPicker
+              label="Source"
+              value={rawAudioAsset?.id ?? selectedRawAssetId}
+              onChange={setSelectedRawAssetId}
+              allowedKinds={["vocal", "full_song", "stem"]}
+              preferredKinds={["vocal"]}
+              emptyLabel="Raw song"
+              warning="Best results need isolated vocal."
+              variant="compact"
+            />
+            <AudioAssetPicker
+              label="Export"
+              value={processedAudioAsset?.id ?? selectedProcessedAssetId}
+              onChange={setSelectedProcessedAssetId}
+              allowedKinds={["vocal", "beat", "full_song"]}
+              preferredKinds={["full_song", "vocal"]}
+              emptyLabel="Processed song"
+              variant="compact"
+            />
+            <button
+              type="button"
+              className={styles.browseLink}
+              onClick={() => void handleCompareSelectedAssets()}
+              disabled={!rawAudioAsset || !processedAudioAsset || isProcessing}
+              style={{ marginLeft: 12, height: 32, margin: 0, padding: "0 16px" }}
+            >
+              {isProcessing ? "Analyzing..." : "Compare"}
+            </button>
+          </div>
+        </header>
+
+      <ToolLockedOverlay
+        key={project ? `${project.id}:level-lab` : "level-lab"}
+        locked={!isLevelLabUnlocked}
+        className={styles.contentArea}
+        momentKey={project ? `${project.id}:level-lab` : "level-lab"}
+      >
         <div className={styles.contentArea}>
           <section className={styles.metricsBar} aria-label="Level Lab metrics">
             <div className={styles.metricCell}>
@@ -542,11 +574,7 @@ export default function LevelLabPage() {
             <>
             <div
               className={`${styles.levelLabPreview} ${
-                uploadWidgetMode === "mini"
-                  ? styles.levelLabPreviewLive
-                  : uploadWidgetMode === "closing"
-                    ? styles.levelLabPreviewWaking
-                    : styles.levelLabPreviewBlurred
+                hasProcessed ? styles.levelLabPreviewLive : styles.levelLabPreviewBlurred
               }`}
               aria-label="Level Lab preview"
             >
@@ -638,67 +666,19 @@ export default function LevelLabPage() {
                   </div>
                 </div>
               </div>
-            {uploadWidgetMode !== "mini" && (
+            {(!rawAudioAsset || !processedAudioAsset) && (
             <div className={styles.uploadCardWrapper}>
-              <div
-                className={`${styles.uploadCard} ${
-                  uploadWidgetMode === "closing" ? styles.uploadCardClosing : ""
-                } ${
-                  uploadWidgetMode === "opening" ? styles.uploadCardOpening : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  className={styles.dismissUploadButton}
-                  onClick={closeUploadWidget}
-                  disabled={isProcessing}
-                  aria-label="Collapse upload card"
-                >
-                  X
-                </button>
-                <div className={styles.pulseLines}>
-                  <div className={styles.pulseLineTop} />
-                  <div className={styles.pulseLineBottom} />
-                </div>
-                
-                <div className={styles.uploadHeading}>Drop your processed vocal</div>
+              <div className={styles.uploadCard} style={{ textAlign: "center" }}>
+                <div className={styles.uploadHeading}>Compare project assets</div>
                 <div className={styles.uploadBody}>
-                  {hasRawVocal
-                    ? "Apply the chain in your DAW, export the vocal, and drop it here. MimiQ will compare it against the raw vocal from this project."
-                    : rawMissingMessage}
+                  Select your raw source and processed export from the header above to evaluate your mix.
                 </div>
-
                 {(!hasRawVocal || errorText) && (
                   <div className={styles.deltaInterpretation}>
                     {errorText ?? rawMissingMessage}
                   </div>
                 )}
-
-                {!isProcessing ? (
-                  <>
-                    <div 
-                      className={`${styles.dropZone} ${isDragging ? styles.dropZoneActive : ""}`}
-                      onDragOver={onDragOver}
-                      onDragLeave={onDragLeave}
-                      onDrop={onDrop}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <span className={styles.dropZoneText}>
-                        {hasRawVocal ? "Drop .wav or .mp3" : "Raw vocal required first"}
-                      </span>
-                    </div>
-                    <div className={styles.browseLink} onClick={() => fileInputRef.current?.click()}>
-                      Browse files
-                    </div>
-                    <input 
-                      type="file" 
-                      accept=".wav,.mp3"
-                      ref={fileInputRef} 
-                      style={{ display: 'none' }} 
-                      onChange={onFileInput}
-                    />
-                  </>
-                ) : (
+                {isProcessing && (
                   <div style={{ width: "100%", marginTop: "16px", display: "flex", flexDirection: "column", alignItems: "center" }}>
                     <div className={styles.typewriterText}>{typewriterText}</div>
                     <div className={styles.progressTrack}>
@@ -706,34 +686,8 @@ export default function LevelLabPage() {
                     </div>
                   </div>
                 )}
-
-                <div className={styles.cardDivider} />
-                <div className={styles.beforeLabel}>BEFORE — raw vocal</div>
-                <div className={styles.metricsRow}>
-                  <div className={styles.metricPill}><span>LUFS</span> -{formatVal(rawMetrics?.lufs)}</div>
-                  <div className={styles.metricPill}><span>DR</span> {formatVal(rawMetrics?.dynamicRange)}dB</div>
-                  <div className={styles.metricPill}><span>CENT</span> {formatVal(rawMetrics?.spectralCentroid, true)}k</div>
-                </div>
               </div>
             </div>
-            )}
-            {uploadWidgetMode === "mini" && !isProcessing && (
-              <button
-                type="button"
-                className={styles.uploadMiniWidget}
-                onClick={openUploadWidget}
-                aria-label="Open processed vocal upload"
-              >
-                <span className={styles.miniUploadIcon} aria-hidden="true" />
-                <span className={styles.uploadMiniText}>Drop processed vocal</span>
-                {rawMetrics && (
-                  <span className={styles.uploadMiniMetrics}>
-                    <span><em>LUFS</em> -{formatVal(rawMetrics.lufs)}</span>
-                    <span><em>DR</em> {formatVal(rawMetrics.dynamicRange)}</span>
-                    <span><em>CENT</em> {formatVal(rawMetrics.spectralCentroid, true)}k</span>
-                  </span>
-                )}
-              </button>
             )}
             </>
           ) : (
@@ -986,7 +940,9 @@ export default function LevelLabPage() {
             trackName={transportTrackName}
           />
         </div>
-      </GateScreen>
+      </ToolLockedOverlay>
+      </div>
+      <MobileTabBar activePage="level-lab" />
     </div>
     </ProjectGate>
   );

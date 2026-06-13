@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { Logo } from "@/components/ui/logo";
 import styles from "./page.module.css";
 
 const safeNext = (value: string | null) => {
@@ -57,7 +58,7 @@ export default function AuthCallbackPage() {
   return (
     <main className={styles.page}>
       <div className={styles.box}>
-        <span>MimiQ</span>
+        <Logo className="text-xl" />
         <p>{msg}</p>
       </div>
     </main>

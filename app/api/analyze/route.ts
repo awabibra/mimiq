@@ -12,6 +12,10 @@ import {
   type GenreName,
   type GenreProfile,
 } from "@/lib/chainKnowledge";
+import {
+  assetResolutionResponse,
+  resolveProjectAssetFile,
+} from "@/lib/serverProjectAudio";
 
 /* ═══════════════════════════════════════════════════════════════
    Constants
@@ -298,7 +302,7 @@ Vocal metrics:
 - Dark/bright preference: ${xyY == null ? "profile default" : round(xyY, 2)} (0 = dark, 1 = bright)
 
 Deterministic context:
-- MimiQ calculates every gate, high-pass, compressor, EQ, de-esser, saturation, bus, and limiter setting locally from the measured metrics and the ${dawName} profile.
+- mimiq calculates every gate, high-pass, compressor, EQ, de-esser, saturation, bus, and limiter setting locally from the measured metrics and the ${dawName} profile.
 - The loudness rule is: the vocal is ${lufsRule} the target.
 - The dynamics rule is: the vocal is ${dynamicRangeDelta > 0 ? "wider than target" : "tighter than target"}.
 - The brightness rule is: ${brightnessRule}.
@@ -1176,8 +1180,37 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ── Full analysis path (new file upload) ── */
-    const vocalFile = formData.get("vocalFile") as File | null;
+    /* ── Full analysis path ── */
+    const projectId = (formData.get("projectId") as string) || null;
+    const vocalAssetId = (formData.get("vocalAssetId") as string) || null;
+    const beatAssetId = (formData.get("beatAssetId") as string) || null;
+    let vocalFile = formData.get("vocalFile") as File | null;
+    let beatFile = formData.get("beatFile") as File | null;
+
+    try {
+      const vocalAsset = await resolveProjectAssetFile({
+        req,
+        projectId,
+        assetId: vocalAssetId,
+        allowedKinds: ["vocal", "full_song"],
+        label: "Vocal",
+      });
+      const beatAsset = await resolveProjectAssetFile({
+        req,
+        projectId,
+        assetId: beatAssetId,
+        allowedKinds: ["beat"],
+        label: "Beat",
+      });
+
+      vocalFile = vocalAsset?.file ?? vocalFile;
+      beatFile = beatAsset?.file ?? beatFile;
+    } catch (error) {
+      const response = assetResolutionResponse(error);
+      if (response) return response;
+      throw error;
+    }
+
     if (!vocalFile) {
       return NextResponse.json(
         { error: "analysis_failed", message: "No vocal file provided." },
@@ -1196,7 +1229,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const beatFile = formData.get("beatFile") as File | null;
     if (beatFile && beatFile.size > MAX_FILE_SIZE) {
       return NextResponse.json(
         {

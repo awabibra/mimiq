@@ -527,7 +527,7 @@ export const GENRE_PROFILES: Record<GenreName, GenreProfile> = {
   },
   "4you": {
     philosophy:
-      "Custom MimiQ blend of R&B top-end intimacy and hip-hop punch, with values kept responsive to the user's actual loudness, range, brightness, and sibilance measurements.",
+      "Custom mimiq blend of R&B top-end intimacy and hip-hop punch, with values kept responsive to the user's actual loudness, range, brightness, and sibilance measurements.",
     compression: {
       primary: {
         style: "FET_1176",

@@ -8,44 +8,71 @@
 
 @media (max-width: 768px) {
   .mobileTabBar {
-    display: flex;
     position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 56px;
-    background: var(--bg-base);
-    border-top: 0.5px solid var(--border-default);
     z-index: 100;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    height: 58px;
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-top-color: var(--border-active);
+    border-radius: 12px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018)),
+      rgba(5, 5, 5, 0.88);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 18px 54px rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(16px);
   }
 
   .mobileTab {
-    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
+    min-width: 0;
+    gap: 4px;
     background: none;
     border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.055);
     color: var(--text-tertiary);
-    font-size: 10px;
-    font-family: inherit;
+    font-size: 9px;
+    font-weight: 700;
+    font-family: var(--font-mono);
     cursor: pointer;
-    transition: color var(--transition);
+    transition:
+      background var(--transition),
+      color var(--transition),
+      transform var(--transition);
     text-decoration: none;
+    text-transform: uppercase;
+  }
+
+  .mobileTab:last-child {
+    border-right: 0;
   }
 
   .mobileTab:hover {
-    color: var(--text-secondary);
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.035);
+  }
+
+  .mobileTab:active {
+    transform: scale(0.98);
   }
 
   .mobileTabActive {
     color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    box-shadow: inset 0 2px 0 var(--accent);
   }
 
   .mobileTabIcon {
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
   }
 }

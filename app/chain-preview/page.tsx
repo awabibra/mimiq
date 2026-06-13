@@ -28,7 +28,7 @@ const previewChain: ChainStep[] = [
 export default function ChainPreviewPage() {
   return (
     <div className={styles.layout}>
-      <Sidebar activePage="sandbox" activeEra={eras[5]} onEraChange={() => {}} savedCount={0} />
+      <Sidebar activePage="sandbox" savedCount={2} />
       <div className={`${styles.sandboxContent} ${styles.sandboxContentResults}`}>
         <main className={`${styles.center} ${styles.centerToolDock}`} />
         <aside className={styles.right}>

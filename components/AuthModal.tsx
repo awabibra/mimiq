@@ -26,7 +26,7 @@ export function AuthModal({
   onClose,
   initialMode = "signin",
   title = "Save this project",
-  text = "Sign in or create an account so MimiQ can keep your setup and send you to your projects.",
+  text = "Sign in or create an account so mimiq can keep your setup and send you to your projects.",
   subtext,
   nextPath = "/projects",
   pendingAuthKey,

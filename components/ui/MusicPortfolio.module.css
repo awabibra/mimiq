@@ -1,0 +1,152 @@
+.container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-primary, "PP Supply Mono", monospace);
+  color: #E2E2E2;
+  z-index: 0; /* Behind other app elements but fills negative space */
+}
+
+.backgroundImage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 105%;
+  height: 105%;
+  transform: translate(-50%, -50%) scale(1.1);
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 0.8s ease, transform 1s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  filter: blur(12px) brightness(0.4);
+  pointer-events: none;
+  z-index: -2;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.6) 100%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.portfolioContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 4rem;
+  z-index: 1;
+}
+
+.projectList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.projectItem {
+  display: grid;
+  grid-template-columns: 2fr 3fr 1.5fr 1.5fr 1fr;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: crosshair;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  color: rgba(226, 226, 226, 0.5);
+}
+
+.headerItem {
+  color: var(--color-accent, #D4A84B);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: default;
+  margin-bottom: 1rem;
+}
+
+.projectItem:hover, .projectItem.active {
+  color: var(--color-accent, #D4A84B);
+  opacity: 1 !important;
+  transform: translateX(10px);
+  border-bottom-color: var(--color-accent, #D4A84B);
+}
+
+.portfolioContainer.hasActive .projectItem:not(.active):not(.headerItem) {
+  opacity: 0.2;
+}
+
+.projectItem.idle {
+  animation: idleFloat 4s ease-in-out infinite alternate;
+}
+
+@keyframes idleFloat {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-5px); }
+}
+
+.projectData {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cornerElements {
+  position: absolute;
+  inset: 2rem;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  z-index: 10;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: rgba(226, 226, 226, 0.4);
+}
+
+.cornerItem {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.topLeft { top: 0; left: 0; }
+.topRight { top: 0; right: 0; display: flex; gap: 0.5rem; }
+.bottomLeft { bottom: 0; left: 0; }
+.bottomRight { bottom: 0; right: 0; }
+
+.cornerItem a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.cornerItem a:hover {
+  color: var(--color-accent, #D4A84B);
+}
+
+.cornerSquare {
+  width: 8px;
+  height: 8px;
+  background-color: var(--color-accent, #D4A84B);
+}
+
+.timeBlink {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}

@@ -1,49 +1,30 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { AnalysisResponse, LevelLabResponse } from '@/lib/types';
+import { create } from "zustand";
+import type { AnalysisResponse, LevelLabResponse, XYPosition } from "@/lib/types";
 
 interface AudioState {
-  vocalFileUrl: string | null;
-  beatFileUrl: string | null;
   analysisResult: AnalysisResponse | null;
-  processedFileUrl: string | null;
   processedAnalysis: LevelLabResponse | null;
   isAnalyzed: boolean;
-  currentXyPosition: { x: number; y: number };
+  currentXyPosition: XYPosition;
   setSession: (data: Partial<AudioState>) => void;
   clearSession: () => void;
 }
 
-export const useAudioStore = create<AudioState>()(
-  persist(
-    (set) => ({
-      vocalFileUrl: null,
-      beatFileUrl: null,
+export const useAudioStore = create<AudioState>()((set) => ({
+  analysisResult: null,
+  processedAnalysis: null,
+  isAnalyzed: false,
+  currentXyPosition: { x: 0, y: 0 },
+  setSession: (data) =>
+    set((state) => ({
+      ...state,
+      ...data,
+    })),
+  clearSession: () =>
+    set({
       analysisResult: null,
-      processedFileUrl: null,
       processedAnalysis: null,
       isAnalyzed: false,
       currentXyPosition: { x: 0, y: 0 },
-      setSession: (data) =>
-        set((state) => {
-          // If vocalFileUrl is being updated (i.e. new session start), clear processed context
-          const isNewSession = data.vocalFileUrl !== undefined && data.vocalFileUrl !== state.vocalFileUrl;
-          return {
-            ...state,
-            ...data,
-            ...(isNewSession && { processedFileUrl: null, processedAnalysis: null }),
-          };
-        }),
-      clearSession: () =>
-        set({
-          vocalFileUrl: null,
-          beatFileUrl: null,
-          analysisResult: null,
-          processedFileUrl: null,
-          processedAnalysis: null,
-          isAnalyzed: false,
-        }),
     }),
-    { name: 'mimiq-audio-session' }
-  )
-);
+}));

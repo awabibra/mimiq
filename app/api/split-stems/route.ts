@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  assetResolutionResponse,
+  resolveProjectAssetFile,
+} from "@/lib/serverProjectAudio";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = [".wav", ".mp3", ".flac"];
+const DEFAULT_MODEL = "htdemucs";
+
+function parseMode(value: FormDataEntryValue | null) {
+  const parsed = Number(value);
+  if (parsed === 2 || parsed === 4 || parsed === 6) return parsed;
+  return 4;
+}
 
 async function readServiceError(res: Response) {
   const text = await res.text().catch(() => "");
@@ -26,19 +38,58 @@ export async function POST(req: NextRequest) {
     }
 
     const formData = await req.formData();
-    const audio = formData.get("audio") as File | null;
+    const projectId = (formData.get("projectId") as string) || null;
+    const sourceAssetId = (formData.get("sourceAssetId") as string) || null;
+    let audio = formData.get("audio") as File | null;
+    const mode = parseMode(formData.get("mode"));
+    const model =
+      typeof formData.get("model") === "string"
+        ? (formData.get("model") as string).trim() || DEFAULT_MODEL
+        : DEFAULT_MODEL;
+
+    try {
+      if (sourceAssetId) {
+        const asset = await resolveProjectAssetFile({
+          req,
+          projectId,
+          assetId: sourceAssetId,
+          allowedKinds: ["full_song", "beat", "stem"],
+          label: "Stem source",
+        });
+        audio = asset?.file ?? audio;
+      } else {
+        // Enforce auth even for raw file uploads to protect the audio service
+        const auth = req.headers.get("authorization") ?? "";
+        const token = auth.split(" ")[1];
+        if (!token) {
+          return NextResponse.json(
+            { error: "auth_required", message: "Sign in to split stems." },
+            { status: 401 }
+          );
+        }
+      }
+    } catch (error) {
+      const response = assetResolutionResponse(error);
+      if (response) return response;
+      throw error;
+    }
 
     if (!audio) {
       return NextResponse.json(
-        { error: "missing_audio", message: "Upload a .wav or .mp3 file." },
+        { error: "missing_audio", message: "Upload a .wav, .mp3, or .flac file." },
         { status: 400 }
       );
     }
 
     const lowerName = audio.name.toLowerCase();
-    if (!lowerName.endsWith(".wav") && !lowerName.endsWith(".mp3")) {
+    const isAllowed = ALLOWED_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+
+    if (!isAllowed) {
       return NextResponse.json(
-        { error: "unsupported_format", message: "Stem Splitter accepts .wav or .mp3." },
+        {
+          error: "unsupported_format",
+          message: "Stem Splitter accepts .wav, .mp3, or .flac.",
+        },
         { status: 415 }
       );
     }
@@ -52,6 +103,8 @@ export async function POST(req: NextRequest) {
 
     const upstreamForm = new FormData();
     upstreamForm.append("audio", audio);
+    upstreamForm.append("mode", String(mode));
+    upstreamForm.append("model", model);
 
     const res = await fetch(`${serviceUrl}/api/split-stems`, {
       method: "POST",

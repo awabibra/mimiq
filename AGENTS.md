@@ -1,10 +1,10 @@
-# MimiQ Agent Contract
+# mimiq Agent Contract
 
-This file is the permanent working contract for MimiQ. Every agent, script, and human contributor must treat these rules as stricter than local preference.
+This file is the permanent working contract for mimiq. Every agent, script, and human contributor must treat these rules as stricter than local preference.
 
 ## Product Definition
 
-MimiQ is a technical assistant for vocal mixing and performance tracking tailored for modern rap artists.
+mimiq is a technical assistant for vocal mixing and performance tracking tailored for modern rap artists.
 
 The product should feel like a serious studio tool: fast, dark, quiet, precise, and built around the artist's current project rather than around generic dashboards or marketing pages.
 
@@ -12,10 +12,10 @@ The existing landing page and sandbox entry transition are visual quality refere
 
 ## Product Principles
 
-- The first screen is the usable MimiQ workspace. Do not open on a marketing dashboard, generic admin overview, onboarding wall, or explanatory landing page unless explicitly requested.
+- The first screen is the usable mimiq workspace. Do not open on a marketing dashboard, generic admin overview, onboarding wall, or explanatory landing page unless explicitly requested.
 - The active project stays present across tools. The artist should always know which project, song, take, chain, and analysis context they are working on.
 - Every tool is a view into the current project document, not a separate product with its own duplicate state model.
-- `Level Lab` must verify whether a processed export improved. It should compare source, processed export, project targets, and reference context through measured deltas, then show improvements, regressions, and unknowns separately.
+- `E-Val` must verify whether a processed export improved. It should compare source, processed export, project targets, and reference context through measured deltas, then show improvements, regressions, and unknowns separately.
 - Trust is more important than impressive claims. Prefer measured, scoped, modest output over confident-sounding guesses.
 - Never claim exact chains, guaranteed professional results, radio-ready validation, professional confidence, or precise improvement unless the relevant signal was directly measured and the basis is visible to the user.
 
@@ -62,7 +62,7 @@ The existing landing page and sandbox entry transition are visual quality refere
 
 ## Project-as-a-Window
 
-MimiQ uses a document-driven "Project-as-a-Window" paradigm.
+mimiq uses a document-driven "Project-as-a-Window" paradigm.
 
 - A project is the main working document.
 - The visible app is a window into the current project, not a collection of separate apps.
@@ -73,9 +73,9 @@ MimiQ uses a document-driven "Project-as-a-Window" paradigm.
 
 ## Tools-as-Tabs
 
-MimiQ tools are tabs over the same project document.
+mimiq tools are tabs over the same project document.
 
-- `Mix Room`, `Level Lab`, `Vault`, onboarding, and future tools must read from and write to the active project context.
+- `Collision Check`, `E-Val`, `Vault`, onboarding, and future tools must read from and write to the active project context.
 - A tool may own its local UI controls, but it must not own a duplicate project model.
 - Switching tabs should preserve project state, selected take, active chain, and relevant analysis context.
 - Tool navigation should feel like moving around one studio window, not launching new products.
@@ -116,7 +116,7 @@ MimiQ tools are tabs over the same project document.
 
 ## Layout Rules
 
-- The first screen must be the usable MimiQ workspace.
+- The first screen must be the usable mimiq workspace.
 - Do not build a marketing landing page unless explicitly requested.
 - Treat the project window as the stable frame: persistent context, tabbed tools, and one active work area.
 - Avoid cards inside cards.
@@ -132,7 +132,7 @@ MimiQ tools are tabs over the same project document.
 - Keep temporary UI-only state in Zustand.
 - Keep uploaded or analyzed audio handling explicit. Do not silently persist audio beyond the intended project workflow.
 - Any score, recommendation, or diagnosis must be traceable to the take, chain, project settings, and analysis version that produced it.
-- `Level Lab` evaluations must compare the processed export against the original take and any selected target/reference using deterministic measurements where available. If MimiQ cannot verify improvement, it must say so plainly.
+- `E-Val` evaluations must compare the processed export against the original take and any selected target/reference using deterministic measurements where available. If mimiq cannot verify improvement, it must say so plainly.
 - Separate measured deltas from interpretation. Store and display enough detail for the user to see what changed, what improved, what regressed, and what could not be measured.
 - AI output should assist the artist and engineer by explaining measured signals, project context, and user-provided notes. It must not pretend to hear details that were not analyzed or provided.
 - Do not invent confidence. Confidence must come from deterministic measurements, calibration data, repeatable comparisons, or explicit user feedback. Otherwise, show uncertainty or omit confidence entirely.

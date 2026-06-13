@@ -15,6 +15,16 @@ export async function GET(
   context: { params: Promise<{ jobId: string; stem: string }> }
 ) {
   const { jobId, stem } = await context.params;
+  const normalizedStem = stem.toLowerCase();
+  const allowed = new Set(["vocals", "drums", "bass", "other", "guitar", "piano"]);
+
+  if (!allowed.has(normalizedStem)) {
+    return NextResponse.json(
+      { error: "stem_not_supported", message: "Requested stem is not supported." },
+      { status: 404 }
+    );
+  }
+
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
 
   if (!serviceUrl) {
@@ -27,9 +37,12 @@ export async function GET(
     );
   }
 
-  const res = await fetch(`${serviceUrl}/api/split-stems/${jobId}/files/${stem}`, {
-    cache: "no-store",
-  });
+  const res = await fetch(
+    `${serviceUrl}/api/split-stems/${jobId}/files/${normalizedStem}`,
+    {
+      cache: "no-store",
+    }
+  );
 
   if (!res.ok || !res.body) {
     return NextResponse.json(

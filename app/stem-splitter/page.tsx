@@ -1,224 +1,188 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Sidebar } from "@/components/Sidebar";
-import { MobileTabBar } from "@/components/MobileTabBar";
-import { ProjectGate } from "@/components/ProjectGate";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { StudioShell } from "@/components/StudioShell";
+import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
+import { AudioAssetPicker, pickReadyAsset } from "@/components/AudioAssetPicker";
+
+import { authHeaders } from "@/lib/apiAuth";
 import { defaultEra, eras, type Era } from "@/lib/eras";
 import { useStore } from "@/lib/store";
-import { useProject } from "@/lib/useProject";
+import { isLocalProject, useProject } from "@/lib/useProject";
+import { saveProjectPatch } from "@/lib/projects";
+import {
+  createStoredAudioAsset,
+  getProjectAudioAssets,
+  upsertProjectAudioAsset,
+} from "@/lib/projectAudio";
+import { useAuth } from "@/lib/useAuth";
+import { useStemSplitterStore, type StemSplitterLaneState } from "@/lib/useStemSplitterStore";
+import { loadWaveSurferFactory, type WaveSurferInstance } from "@/lib/waveSurferLoader";
+import type {
+  StemSplitFileMeta,
+  StemSplitInsightClaims,
+  StemSplitInsightResponse,
+  StemSplitJobResponse,
+  StemSplitMode,
+  StemSplitStatus,
+} from "@/lib/types";
 import styles from "./page.module.css";
 
-type JobStatus = "queued" | "processing" | "complete" | "failed";
-type StemName = "vocals" | "drums" | "bass" | "other";
-
-interface StemFile {
-  name: StemName;
-  filename: string;
-  url: string;
+interface LanePlaybackController {
+  play: () => void;
+  pause: () => void;
+  setTime: (seconds: number) => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  setVolume: (volume: number) => void;
+  isPlaying: () => boolean;
 }
 
-interface SplitJob {
-  job_id: string;
-  status: JobStatus;
-  created_at: string;
-  updated_at: string;
-  source_filename: string;
-  message?: string;
-  error?: string;
-  stems?: Partial<Record<StemName, StemFile>>;
-}
+type ClaimSection = {
+  key: keyof StemSplitInsightClaims;
+  title: string;
+};
 
-interface ApiError {
-  message?: string;
-  error?: string;
-}
+const CLAIM_SECTIONS: ClaimSection[] = [
+  { key: "measured", title: "Measured facts" },
+  { key: "inferred", title: "AI interpretation" },
+  { key: "estimated", title: "Estimated context" },
+  { key: "unknown", title: "Unknowns / limits" },
+];
 
-const STEM_ORDER: StemName[] = ["vocals", "drums", "bass", "other"];
-const STEM_LABELS: Record<StemName, string> = {
+const ACCEPTED_EXTENSIONS = [".wav", ".mp3", ".flac"];
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const POLL_INTERVAL_MS = 2000;
+const DEFAULT_MODEL = "htdemucs";
+const MODE_OPTIONS: StemSplitMode[] = [2, 4, 6];
+const STAGE_TEXT: Record<StemSplitStatus, string> = {
+  idle: "Ready",
+  uploading: "Uploading",
+  queued: "Queued",
+  processing: "Splitting",
+  complete: "Complete",
+  failed: "Failed",
+};
+const STEM_LABELS: Record<string, string> = {
   vocals: "Vocals",
   drums: "Drums",
   bass: "Bass",
+  piano: "Piano",
+  guitar: "Guitar",
   other: "Other",
 };
+const STEM_COLORS: Record<string, string> = {
+  vocals: "#39c0ff",
+  drums: "#f85f75",
+  bass: "#6b60ff",
+  piano: "#67e18a",
+  guitar: "#f2cd5f",
+  other: "#8f8f8f",
+};
+const STEM_ORDER: Record<string, number> = {
+  vocals: 0,
+  drums: 1,
+  bass: 2,
+  piano: 3,
+  guitar: 4,
+  other: 5,
+};
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024;
-
-function UploadArrowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 16V4" />
-      <path d="M7 9l5-5 5 5" />
-      <path d="M5 20h14" />
-    </svg>
-  );
-}
-
-function AnimatedDashedBorder() {
-  return (
-    <svg
-      className={styles.dashedSvg}
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <rect
-        className={styles.dashedRectPrimary}
-        x="0.5"
-        y="0.5"
-        width="99"
-        height="99"
-        rx="3"
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect
-        className={styles.dashedRectSecondary}
-        x="0.5"
-        y="0.5"
-        width="99"
-        height="99"
-        rx="3"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
-}
-
-function readFileError(res: Response) {
-  return res.json().then(
-    (data: ApiError) =>
-      data.message || data.error || "Stem Splitter could not process that file.",
-    () => "Stem Splitter could not process that file."
-  );
-}
-
-function isAcceptedAudio(file: File) {
-  const name = file.name.toLowerCase();
-  return name.endsWith(".wav") || name.endsWith(".mp3");
-}
-
-function formatFileSize(size: number) {
-  const mb = size / (1024 * 1024);
+function formatBytes(value: number) {
+  const mb = value / (1024 * 1024);
   return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
 }
 
-function statusLabel(status: JobStatus | "idle" | "uploading") {
-  if (status === "idle") return "Ready";
-  if (status === "uploading") return "Uploading";
-  if (status === "queued") return "Queued";
-  if (status === "processing") return "Separating";
-  if (status === "complete") return "Complete";
-  return "Failed";
+function formatDuration(value: number | null | undefined) {
+  if (!Number.isFinite(value ?? NaN)) return "--:--";
+
+  const total = Math.max(0, Math.floor(value as number));
+  const minutes = Math.floor(total / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
 }
 
-function ProcessingState({ job }: { job: SplitJob | null }) {
-  return (
-    <div className={styles.processingPanel} aria-live="polite">
-      <div className={styles.cinematicContent}>
-        <div className={styles.cinematicText}>
-          <span className={styles.cinematicTextMain}>Separat</span>
-          <span className={styles.cinematicLetterE}>e</span>
-          <span className={styles.cinematicLetterIng}>ing</span>
-          <span className={styles.cinematicDot}>.</span>
-        </div>
-        <div className={styles.cinematicBar}>
-          <div className={styles.cinematicBarFill} />
-        </div>
-      </div>
-
-      <div className={styles.processingRows}>
-        {[
-          "Source captured",
-          "Demucs htdemucs queued",
-          "Splitting vocals, drums, bass, other",
-          "Preparing downloads",
-        ].map((step, index) => (
-          <div
-            key={step}
-            className={styles.processingRow}
-            style={{ "--delay": `${index * 420}ms` } as React.CSSProperties}
-          >
-            <span>{step}</span>
-            <span className={styles.processingTick} />
-          </div>
-        ))}
-      </div>
-
-      <div className={styles.processingMessage}>
-        {job?.message || "CPU separation can take a minute on full songs."}
-      </div>
-    </div>
-  );
+function parseServiceError(res: Response) {
+  return res.text().then((text) => {
+    try {
+      const parsed = JSON.parse(text) as { message?: string; detail?: string };
+      return parsed.message || parsed.detail || "Stem split failed.";
+    } catch {
+      return text || "Stem split failed.";
+    }
+  });
 }
 
-function StemWaveform({ stem }: { stem: StemFile }) {
-  const [bars, setBars] = useState<number[] | null>(null);
-  const [failed, setFailed] = useState(false);
+function isAcceptedStemFile(file: File | null) {
+  if (!file) return true;
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 
-  useEffect(() => {
-    let cancelled = false;
+function readAudioPreview(file: File): Promise<{ duration: number; peaks: number[] }> {
+  return new Promise((resolve, reject) => {
+    const AudioContextImpl =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
-    async function buildWaveform() {
-      try {
-        const AudioCtx =
-          window.AudioContext ||
-          (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-            .webkitAudioContext;
-
-        if (!AudioCtx) throw new Error("Web Audio API unavailable.");
-
-        const res = await fetch(stem.url);
-        if (!res.ok) throw new Error("Could not load stem.");
-
-        const ctx = new AudioCtx();
-        const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
-        const data = buffer.getChannelData(0);
-        const count = 68;
-        const blockSize = Math.max(1, Math.floor(data.length / count));
-        const peaks = Array.from({ length: count }, (_, index) => {
-          const start = index * blockSize;
-          const end = Math.min(data.length, start + blockSize);
-          let peak = 0;
-
-          for (let i = start; i < end; i++) {
-            peak = Math.max(peak, Math.abs(data[i] ?? 0));
-          }
-
-          return peak;
-        });
-        const maxPeak = Math.max(...peaks, 0.01);
-        const normalized = peaks.map((peak) => Math.max(0.08, peak / maxPeak));
-
-        await ctx.close().catch(() => undefined);
-        if (!cancelled) setBars(normalized);
-      } catch {
-        if (!cancelled) setFailed(true);
-      }
+    if (!AudioContextImpl) {
+      reject(new Error("Audio context unavailable."));
+      return;
     }
 
-    buildWaveform();
+    file
+      .arrayBuffer()
+      .then(async (buffer) => {
+        const context = new AudioContextImpl();
+        try {
+          const decoded = await context.decodeAudioData(buffer.slice(0));
+          const channel = decoded.getChannelData(0);
+          const sampleSlots = 68;
+          const chunk = Math.max(1, Math.floor(channel.length / sampleSlots));
+          const peaks = Array.from({ length: sampleSlots }, (_, index) => {
+            const start = index * chunk;
+            const end = Math.min(channel.length, start + chunk);
+            let maxPeak = 0;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [stem.url]);
+            for (let i = start; i < end; i += 1) {
+              maxPeak = Math.max(maxPeak, Math.abs(channel[i] ?? 0));
+            }
 
-  if (failed) {
+            return maxPeak;
+          });
+
+          const maxPeak = Math.max(...peaks, 0.001);
+          resolve({
+            duration: decoded.duration,
+            peaks: peaks.map((peak) => Math.max(0.05, peak / maxPeak)),
+          });
+        } catch (error) {
+          reject(error);
+        } finally {
+          void context.close().catch(() => undefined);
+        }
+      })
+      .catch(reject);
+  });
+}
+
+function SourceWaveform({ peaks }: { peaks: number[] }) {
+  if (peaks.length === 0) {
     return (
-      <div className={styles.waveformFallback}>
-        {Array.from({ length: 34 }, (_, index) => (
+      <div className={styles.sourceWaveform} aria-hidden>
+        {Array.from({ length: 42 }, (_, index) => (
           <span
             key={index}
-            style={{ "--height": `${20 + (index % 9) * 7}%` } as React.CSSProperties}
+            className={styles.sourceWaveBar}
+            style={{ height: `${18 + ((index % 9) * 5)}%` }}
           />
         ))}
       </div>
@@ -226,275 +190,1107 @@ function StemWaveform({ stem }: { stem: StemFile }) {
   }
 
   return (
-    <div className={styles.waveform} aria-label={`${stem.name} waveform`}>
-      {(bars ?? Array.from({ length: 68 }, () => 0.2)).map((height, index) => (
+    <div className={styles.sourceWaveform} aria-label="Source waveform preview">
+      {peaks.map((peak, index) => (
         <span
           key={index}
-          className={bars ? styles.waveformBarReady : styles.waveformBarLoading}
-          style={
-            {
-              "--height": `${Math.round(height * 100)}%`,
-              "--delay": `${index * 12}ms`,
-            } as React.CSSProperties
-          }
+          className={styles.sourceWaveBar}
+          style={{ height: `${Math.max(8, Math.round(peak * 100))}%` }}
         />
       ))}
     </div>
   );
 }
 
-function StemCard({ stem, index }: { stem: StemFile; index: number }) {
+function buildQualityLine(meta?: StemSplitFileMeta | null) {
+  if (!meta) {
+    return "-- • --Hz • --bit";
+  }
+
+  return `${formatDuration(meta.duration_s)} • ${meta.sample_rate} Hz • ${
+    meta.bit_depth == null ? "unknown bit" : `${meta.bit_depth}-bit`
+  }`;
+}
+
+function LaneWaveformCard({
+  lane,
+  color,
+  isAudible,
+  onController,
+  onMute,
+  onSolo,
+  onVolume,
+  onPlayPause,
+}: {
+  lane: StemSplitterLaneState;
+  color: string;
+  isAudible: boolean;
+  onController: (id: string, controller: LanePlaybackController | null) => void;
+  onMute: (id: string, muted: boolean) => void;
+  onSolo: (id: string) => void;
+  onVolume: (id: string, volume: number) => void;
+  onPlayPause: (id: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [instance, setInstance] = useState<LanePlaybackController | null>(null);
+  const laneMutedRef = useRef(lane.isMuted);
+  const laneVolumeRef = useRef(lane.volume);
+
+  useEffect(() => {
+    laneMutedRef.current = lane.isMuted;
+    laneVolumeRef.current = lane.volume;
+  }, [lane.isMuted, lane.volume]);
+
+  useEffect(() => {
+    let mounted = true;
+    let wavesurfer: WaveSurferInstance | null = null;
+
+    loadWaveSurferFactory()
+      .then((WaveSurferFactory) => {
+        if (!WaveSurferFactory || !containerRef.current || !mounted) {
+          return;
+        }
+
+        if (typeof WaveSurferFactory.create !== "function") {
+          throw new Error("WaveSurfer factory missing create.");
+        }
+
+        wavesurfer = WaveSurferFactory.create({
+          container: containerRef.current,
+          url: lane.url,
+          waveColor: "rgba(255,255,255,0.14)",
+          progressColor: color,
+          cursorColor: "transparent",
+          cursorWidth: 0,
+          barWidth: 2,
+          barGap: 1,
+          barRadius: 2,
+          height: 58,
+          normalize: true,
+          responsive: true,
+          interact: false,
+        });
+
+        const controller: LanePlaybackController = {
+          play: () => wavesurfer?.play?.(),
+          pause: () => wavesurfer?.pause?.(),
+          setTime: (seconds) => wavesurfer?.setTime?.(seconds),
+          getCurrentTime: () => wavesurfer?.getCurrentTime?.() ?? 0,
+          getDuration: () => wavesurfer?.getDuration?.() ?? 0,
+          setVolume: (volume) => wavesurfer?.setVolume?.(volume),
+          isPlaying: () => wavesurfer?.isPlaying?.() ?? false,
+        };
+
+        setInstance(controller);
+        onController(lane.id, controller);
+
+        const onReady = () => {
+          if (!mounted) {
+            return;
+          }
+
+          wavesurfer?.setVolume?.(
+            laneMutedRef.current ? 0 : laneVolumeRef.current
+          );
+          setReady(true);
+        };
+
+        const onPlay = () => {
+          if (mounted) {
+            setIsPlaying(true);
+          }
+        };
+
+        const onPause = () => {
+          if (mounted) {
+            setIsPlaying(false);
+          }
+        };
+
+        const onFinish = () => {
+          if (mounted) {
+            setIsPlaying(false);
+          }
+        };
+
+        const onError = () => {
+          if (!mounted) return;
+          setError(true);
+          setReady(true);
+        };
+
+        wavesurfer.on("ready", onReady);
+        wavesurfer.on("play", onPlay);
+        wavesurfer.on("pause", onPause);
+        wavesurfer.on("finish", onFinish);
+        wavesurfer.on("error", onError);
+      })
+      .catch(() => {
+        if (!mounted) {
+          return;
+        }
+
+        setError(true);
+        setReady(true);
+      });
+
+    return () => {
+      mounted = false;
+      onController(lane.id, null);
+      if (wavesurfer?.destroy) {
+        wavesurfer.destroy();
+      }
+      setInstance(null);
+      setReady(false);
+      setIsPlaying(false);
+    };
+  }, [lane.id, lane.url, color, onController]);
+
+  useEffect(() => {
+    if (!instance) return;
+    instance.setVolume(lane.isMuted ? 0 : lane.volume);
+  }, [instance, lane.isMuted, lane.volume]);
+
   return (
-    <article
-      className={styles.stemCard}
-      style={{ "--delay": `${index * 90}ms` } as React.CSSProperties}
+    <motion.article
+      className={styles.laneCard}
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+      style={{ opacity: isAudible ? 1 : 0.65 }}
     >
-      <div className={styles.stemCardTop}>
-        <div>
-          <div className={styles.stemLabel}>{STEM_LABELS[stem.name]}</div>
-          <div className={styles.stemMeta}>Separated WAV</div>
+      <header className={styles.laneHeader}>
+        <div className={styles.laneTitleWrap}>
+          <span className={styles.laneChip} style={{ color, borderColor: `${color}aa` }}>
+            {STEM_LABELS[lane.name]}
+          </span>
+          <span className={styles.laneFilename}>{lane.filename}</span>
         </div>
-        <a className={styles.downloadButton} href={stem.url} download={stem.filename}>
-          Download
+        <a href={lane.url} className={styles.downloadButton} download={lane.filename}>
+          WAV
         </a>
+      </header>
+
+      <p className={styles.laneMeta}>{buildQualityLine(lane.fileMeta)}</p>
+
+      <div className={styles.laneWaveform} ref={containerRef} aria-label={`${lane.name} waveform`}>
+        {!ready && !error ? <span>Loading waveform…</span> : null}
+        {error ? <span>Could not load waveform.</span> : null}
       </div>
-      <StemWaveform stem={stem} />
-    </article>
+
+      <div className={styles.laneControls}>
+        <button
+          className={styles.playButton}
+          type="button"
+          onClick={() => onPlayPause(lane.id)}
+          disabled={error}
+          aria-label={`${isPlaying ? "Pause" : "Play"} lane ${STEM_LABELS[lane.name]}`}
+        >
+          {isPlaying ? "II" : "▶"}
+        </button>
+
+        <button
+          type="button"
+          className={styles.toggleButton}
+          onClick={() => onMute(lane.id, !lane.isMuted)}
+        >
+          {lane.isMuted ? "Unmute" : "Mute"}
+        </button>
+
+        <button
+          type="button"
+          className={styles.toggleButton}
+          onClick={() => onSolo(lane.id)}
+        >
+          {lane.isSolo ? "Unsolo" : "Solo"}
+        </button>
+
+        <input
+          className={styles.volumeRange}
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={lane.volume}
+          onChange={(event) => onVolume(lane.id, Number(event.currentTarget.value))}
+          aria-label={`${STEM_LABELS[lane.name]} volume`}
+        />
+      </div>
+    </motion.article>
+  );
+}
+
+function InsightPanel({
+  status,
+  summary,
+  claims,
+}: {
+  status: StemSplitInsightResponse["status"];
+  summary: string;
+  claims: StemSplitInsightClaims;
+}) {
+  return (
+    <section className={styles.insightPanel}>
+      <h2 className={styles.sectionTitle}>AI insight panel</h2>
+      <p className={styles.insightSummary}>{summary || "Awaiting completion."}</p>
+
+      <div className={styles.insightBuckets}>
+        {CLAIM_SECTIONS.map((section) => (
+          <article
+            key={section.key}
+            className={styles.insightBucket}
+            data-loading={status === "loading" ? "true" : "false"}
+            data-error={status === "error" ? "true" : "false"}
+          >
+            <h3>{section.title}</h3>
+            {claims[section.key].length === 0 ? (
+              <p className={styles.insightEmpty}>No {section.title.toLowerCase()} claims yet.</p>
+            ) : (
+              <ul>
+                {claims[section.key].map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
 export default function StemSplitterPage() {
-  const { era: storeEra, setEra } = useStore();
-  const activeEra = eras.find((era) => era.id === storeEra) || defaultEra;
+  const { daw: activeEraDaw, setEra } = useStore();
+  const activeEra = eras.find((era) => era.id === activeEraDaw) || defaultEra;
   const project = useProject((state) => state.project);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const updateProject = useProject((state) => state.updateProject);
+  const user = useAuth((state) => state.user);
 
-  const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [job, setJob] = useState<SplitJob | null>(null);
-  const [errorText, setErrorText] = useState<string | null>(null);
+  const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [sourcePeaks, setSourcePeaks] = useState<number[]>([]);
+  const [savedZip, setSavedZip] = useState(false);
+  const [latestJob, setLatestJob] = useState<StemSplitJobResponse | null>(null);
+  const [selectedSourceAssetId, setSelectedSourceAssetId] = useState<string | null>(null);
+
+  const pollControllerRef = useRef<AbortController | null>(null);
+  const laneControllers = useRef<Record<string, LanePlaybackController | null>>({});
+  const seekDragRef = useRef(false);
+  const persistedJobRef = useRef<string | null>(null);
+
+  const {
+    sourceName,
+    sourceSize,
+    sourceDuration,
+    sourceBpm,
+    sourceUrl,
+    mode,
+    status,
+    progress,
+    stage,
+    message,
+    estimatedRemainingMs,
+    error,
+    jobId,
+    stems,
+    fallback,
+    sixStemAvailable,
+    globalPlaying,
+    globalCurrentTime,
+    duration,
+    isSeeking,
+    activeLaneIds,
+    insightText,
+    insightClaims,
+    insightStatus,
+    beginUpload,
+    setSourcePreview,
+    setSourceBpm,
+    setMode,
+    setUploadedMetadata,
+    setJobSnapshot,
+    setJobError,
+    setLaneMute,
+    toggleLaneSolo,
+    setLaneVolume,
+    setGlobalPlaying,
+    setGlobalCurrentTime,
+    setSeeking,
+    setActiveLanes,
+    setInsights,
+    setInsightStatus,
+    setSixStemAvailable,
+    clear,
+  } = useStemSplitterStore((state) => state);
+  const projectAudioAssets = getProjectAudioAssets(project);
+  const selectedSourceAsset =
+    projectAudioAssets.find((asset) => asset.id === selectedSourceAssetId) ??
+    pickReadyAsset(projectAudioAssets, ["full_song", "beat", "stem"], ["full_song"]);
+
+  const orderedStems = useMemo(
+    () =>
+      [...stems].sort(
+        (left, right) =>
+          (STEM_ORDER[left.name] ?? 99) - (STEM_ORDER[right.name] ?? 99)
+      ),
+    [stems]
+  );
+
+  const audibleLaneIds = useMemo(() => {
+    const hasSolo = orderedStems.some((lane) => lane.isSolo);
+    return orderedStems
+      .filter((lane) => (hasSolo ? lane.isSolo : !lane.isMuted))
+      .map((lane) => lane.id);
+  }, [orderedStems]);
+
+  const hasAudibleLane = useMemo(() => {
+    return audibleLaneIds.length > 0;
+  }, [audibleLaneIds.length]);
+
+  const laneById = useMemo(
+    () => new Map(orderedStems.map((lane) => [lane.id, lane])),
+    [orderedStems]
+  );
+
+  const totalDuration = useMemo(() => {
+    if (duration > 0) return duration;
+    return orderedStems.reduce(
+      (max, lane) => Math.max(max, Number(lane.fileMeta?.duration_s || 0)),
+      0
+    );
+  }, [duration, orderedStems]);
+
+  const updateLaneController = useCallback((id: string, controller: LanePlaybackController | null) => {
+    laneControllers.current[id] = controller;
+  }, []);
+
+  const handleGlobalPlayPause = useCallback(() => {
+    const activeIds = audibleLaneIds.length > 0 ? audibleLaneIds : orderedStems.map((lane) => lane.id);
+
+    if (activeIds.length === 0) return;
+
+    if (globalPlaying) {
+      activeIds.forEach((id) => {
+        const controller = laneControllers.current[id];
+        if (controller) {
+          controller.pause();
+        }
+      });
+      setGlobalPlaying(false);
+      return;
+    }
+
+    activeIds.forEach((id) => {
+      const lane = laneById.get(id);
+      const controller = laneControllers.current[id];
+      if (!lane || !controller) return;
+      const targetTime = Math.min(globalCurrentTime, Math.max(0, controller.getDuration() - 0.03));
+      controller.setTime(targetTime);
+      controller.setVolume(lane.isMuted ? 0 : lane.volume);
+      controller.play();
+    });
+
+    orderedStems
+      .filter((lane) => !activeIds.includes(lane.id))
+      .forEach((lane) => {
+        const controller = laneControllers.current[lane.id];
+        if (controller) {
+          controller.pause();
+        }
+      });
+
+    setActiveLanes(activeIds);
+    setGlobalPlaying(true);
+  }, [globalCurrentTime, globalPlaying, orderedStems, audibleLaneIds, setActiveLanes, setGlobalPlaying, laneById]);
+
+  const latestSeekRef = useRef<number>(0);
+
+  const handleGlobalSeek = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const seek = Number(event.currentTarget.value);
+      latestSeekRef.current = seek;
+      setSeeking(true);
+      seekDragRef.current = true;
+      setGlobalCurrentTime(seek);
+    },
+    [setGlobalCurrentTime, setSeeking]
+  );
+
+  const handleGlobalSeekRelease = useCallback(() => {
+    seekDragRef.current = false;
+    
+    const seek = latestSeekRef.current;
+    audibleLaneIds.forEach((id) => {
+      const controller = laneControllers.current[id];
+      if (controller) {
+        controller.setTime(seek);
+      }
+    });
+
+    setSeeking(false);
+  }, [audibleLaneIds, setSeeking]);
+
+  const requestInsights = useCallback(
+    async (job: StemSplitJobResponse) => {
+      try {
+        setInsightStatus("loading");
+
+        const response = await fetch("/api/stem-insights", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job,
+            project: project
+              ? {
+                  id: project.id,
+                  name: project.name,
+                  stem_split_url: project.stem_split_url,
+                }
+              : null,
+          }),
+        });
+
+        const data = (await response.json()) as StemSplitInsightResponse;
+        setInsights(data.summary ?? "Stem split insights generated.", data.claims);
+        setInsightStatus(response.ok ? data.status : "error");
+      } catch {
+        setInsightStatus("error");
+        setInsights("Could not generate stem insights.", {
+          measured: [],
+          inferred: [],
+          estimated: [],
+          unknown: ["Insight service unavailable."],
+        });
+      }
+    },
+    [project, setInsightStatus, setInsights]
+  );
+
+  const handleSubmit = useCallback(
+    async (params: { file?: File | null; assetId?: string | null }) => {
+      const file = params.file ?? null;
+      if (!isAcceptedStemFile(file)) {
+        setValidationMessage("Use WAV, MP3, or FLAC files only.");
+        return;
+      }
+
+      if (file && file.size > MAX_FILE_SIZE) {
+        setValidationMessage("Audio file exceeds 50 MB.");
+        return;
+      }
+
+      if (!project || !user || isLocalProject(project)) {
+        setValidationMessage("Sign in and select a project before splitting stems.");
+        return;
+      }
+
+      setValidationMessage(null);
+      setSourcePeaks([]);
+      setLatestJob(null);
+      persistedJobRef.current = null;
+      setSavedZip(false);
+      beginUpload(
+        file ??
+          new File([], selectedSourceAsset?.filename ?? "project-audio.mp3", {
+            type: selectedSourceAsset?.mimeType ?? "audio/mpeg",
+          })
+      );
+      setSourcePreview(
+        "",
+        file?.name ?? selectedSourceAsset?.filename ?? "Project asset",
+        file?.size ?? selectedSourceAsset?.size ?? 0,
+        null,
+        []
+      );
+      setSourceBpm(null);
+
+      if (file) try {
+        const preview = await readAudioPreview(file);
+        setSourcePreview("", file.name, file.size, preview.duration, preview.peaks);
+        setSourcePeaks(preview.peaks);
+      } catch {
+        setSourcePeaks([]);
+      }
+
+      try {
+        const formData = new FormData();
+        if (project.id) formData.append("projectId", project.id);
+        if (params.assetId) formData.append("sourceAssetId", params.assetId);
+        if (file) formData.append("audio", file);
+        formData.append("mode", String(mode));
+        formData.append("model", DEFAULT_MODEL);
+
+        const response = await fetch("/api/split-stems", {
+          method: "POST",
+          body: formData,
+          headers: await authHeaders(),
+        });
+
+        if (!response.ok) {
+          const reason = await parseServiceError(response);
+          setJobError(reason);
+          return;
+        }
+
+        const job = (await response.json()) as StemSplitJobResponse;
+        setUploadedMetadata({
+          jobId: job.job_id,
+          requestedMode: job.requested_mode,
+          requestedModel: job.requested_model,
+        });
+        setJobSnapshot(job);
+        setLatestJob(job);
+      } catch (error) {
+        setJobError(error instanceof Error ? error.message : "Stem split request failed.");
+      }
+    },
+	    [
+        beginUpload,
+        mode,
+        project,
+        setJobError,
+        setJobSnapshot,
+        setSourceBpm,
+        setSourcePreview,
+        setUploadedMetadata,
+        selectedSourceAsset?.filename,
+        selectedSourceAsset?.mimeType,
+        selectedSourceAsset?.size,
+        user,
+      ]
+	  );
+
+  const handleSelectedAssetSplit = useCallback(async () => {
+    if (!selectedSourceAsset) {
+      setValidationMessage("Select or upload a full song, beat, or stem.");
+      return;
+    }
+
+    try {
+      setValidationMessage(null);
+      await handleSubmit({ assetId: selectedSourceAsset.id });
+    } catch (error) {
+      setValidationMessage(
+        error instanceof Error ? error.message : "Stem Splitter could not load that asset."
+      );
+    }
+  }, [handleSubmit, selectedSourceAsset]);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--accent", activeEra.accent);
   }, [activeEra.accent]);
 
-  const handleEraChange = useCallback(
-    (era: Era) => {
-      setEra(era.id);
-    },
-    [setEra]
-  );
-
-  const reset = useCallback(() => {
-    setSourceFile(null);
-    setJob(null);
-    setErrorText(null);
-    setUploading(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }, []);
-
-  const startSplit = useCallback(async (file: File) => {
-    if (!isAcceptedAudio(file)) {
-      setErrorText("Stem Splitter accepts .wav or .mp3.");
-      return;
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      setErrorText("Audio file exceeds 50 MB.");
-      return;
-    }
-
-    setSourceFile(file);
-    setJob(null);
-    setErrorText(null);
-    setUploading(true);
-
-    try {
-      const form = new FormData();
-      form.append("audio", file);
-
-      const res = await fetch("/api/split-stems", {
-        method: "POST",
-        body: form,
-      });
-
-      if (!res.ok) throw new Error(await readFileError(res));
-
-      setJob((await res.json()) as SplitJob);
-    } catch (err) {
-      setErrorText(
-        err instanceof Error
-          ? err.message
-          : "Stem Splitter could not process that file."
-      );
-    } finally {
-      setUploading(false);
-    }
-  }, []);
+  useEffect(() => () => pollControllerRef.current?.abort(), []);
 
   useEffect(() => {
-    if (!job?.job_id || !["queued", "processing"].includes(job.status)) return;
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!jobId || (status !== "queued" && status !== "processing")) {
+      return;
+    }
+
+    let active = true;
+    pollControllerRef.current?.abort();
+    pollControllerRef.current = new AbortController();
+    const { signal } = pollControllerRef.current;
 
     const poll = async () => {
+      if (!jobId || signal.aborted || !active) {
+        return;
+      }
+
       try {
-        const res = await fetch(`/api/split-stems/${job.job_id}`, {
+        const response = await fetch(`/api/split-stems/${jobId}`, {
           cache: "no-store",
+          signal,
         });
-        if (!res.ok) throw new Error(await readFileError(res));
-        setJob((await res.json()) as SplitJob);
+
+        if (!response.ok) {
+          const reason = await parseServiceError(response);
+          setJobError(reason);
+          return;
+        }
+
+        const job = (await response.json()) as StemSplitJobResponse;
+        setJobSnapshot(job);
+        setLatestJob(job);
+
+        if (job.requested_mode === 6) {
+          setSixStemAvailable(!Boolean(job.fallback));
+        }
+
+        if (job.status === "complete" && persistedJobRef.current !== job.job_id) {
+          void requestInsights(job);
+          persistedJobRef.current = job.job_id;
+        }
       } catch (err) {
-        setErrorText(
-          err instanceof Error
-            ? err.message
-            : "Stem Splitter could not read the job status."
-        );
+        if (signal.aborted || !active) return;
+        setJobError(err instanceof Error ? err.message : "Stem split status check failed.");
       }
     };
 
-    const interval = window.setInterval(() => void poll(), 3000);
-    return () => window.clearInterval(interval);
-  }, [job?.job_id, job?.status]);
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, POLL_INTERVAL_MS);
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDragOver(false);
-    const file = event.dataTransfer.files[0];
-    if (file) void startSplit(file);
-  };
+    return () => {
+      active = false;
+      clearInterval(timer);
+      pollControllerRef.current?.abort();
+    };
+  }, [jobId, requestInsights, setJobError, setJobSnapshot, setSixStemAvailable, status]);
 
-  const handleInput = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) void startSplit(file);
-  };
+  const savedZipJobRef = useRef<string | null>(null);
 
-  const stems = STEM_ORDER.map((stem) => job?.stems?.[stem]).filter(
-    Boolean
-  ) as StemFile[];
-  const busy = uploading || job?.status === "queued" || job?.status === "processing";
-  const currentStatus = uploading ? "uploading" : job?.status ?? "idle";
+  useEffect(() => {
+    if (!jobId || status !== "complete" || !latestJob || !project || isLocalProject(project)) {
+      return;
+    }
+    if (persistedJobRef.current !== jobId) {
+      return;
+    }
+    if (savedZipJobRef.current === jobId) {
+      return;
+    }
+
+    const zipUrl = `/api/split-stems/${jobId}/zip`;
+    const existingAssets = getProjectAudioAssets(project);
+
+    if (existingAssets.some((a) => a.storage_path === zipUrl)) {
+      savedZipJobRef.current = jobId;
+      setSavedZip(true);
+      return;
+    }
+
+    savedZipJobRef.current = jobId;
+
+    void (async () => {
+      try {
+        const stemAsset = createStoredAudioAsset({
+          kind: "stem",
+          filename: `${project.name}-stems.zip`,
+          mimeType: "application/zip",
+          storagePath: zipUrl,
+        });
+        const audio_assets = upsertProjectAudioAsset(
+          getProjectAudioAssets(project),
+          stemAsset
+        );
+        const patch = await saveProjectPatch(project.id, { audio_assets });
+        updateProject({ audio_assets: patch.audio_assets });
+        setSavedZip(true);
+      } catch {
+        setSavedZip(false);
+      }
+    })();
+  }, [jobId, latestJob, project, status, updateProject]);
+
+  useEffect(() => {
+    if (status !== "processing" && status !== "complete") {
+      return;
+    }
+
+    if (!globalPlaying || isSeeking) {
+      return;
+    }
+
+    const activeIds =
+      activeLaneIds.length > 0 ? activeLaneIds : audibleLaneIds.length > 0 ? audibleLaneIds : orderedStems.map((lane) => lane.id);
+    if (activeIds.length === 0) return;
+
+    let handle = requestAnimationFrame(() => undefined);
+
+    const tick = () => {
+      const leadId = activeIds[0];
+      const lead = leadId ? laneControllers.current[leadId] : null;
+      if (!lead) {
+        handle = requestAnimationFrame(tick);
+        return;
+      }
+
+      const current = lead.getCurrentTime();
+      const total = lead.getDuration();
+      setGlobalCurrentTime(Math.min(current, Math.max(0, total)));
+
+      if (current >= Math.max(0, total - 0.05)) {
+        setGlobalPlaying(false);
+        activeIds.forEach((id) => {
+          const controller = laneControllers.current[id];
+          if (controller) {
+            controller.pause();
+          }
+        });
+        return;
+      }
+
+      handle = requestAnimationFrame(tick);
+    };
+
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [
+    activeLaneIds,
+    audibleLaneIds,
+    globalPlaying,
+    isSeeking,
+    orderedStems,
+    setGlobalCurrentTime,
+    setGlobalPlaying,
+    status,
+  ]);
+
+  const onModeClick = useCallback(
+    (nextMode: StemSplitMode) => {
+      if (status === "uploading" || status === "queued" || status === "processing") {
+        return;
+      }
+
+      if (nextMode === 6 && !sixStemAvailable) {
+        return;
+      }
+
+      setMode(nextMode);
+    },
+    [setMode, status, sixStemAvailable]
+  );
+
+  const onLanePlayPause = useCallback(
+    (laneId: string) => {
+      const lane = laneById.get(laneId);
+      const ctrl = laneControllers.current[laneId];
+      if (!lane || !ctrl) return;
+
+      if (ctrl.isPlaying()) {
+        orderedStems.forEach((row) => {
+          const rowCtrl = laneControllers.current[row.id];
+          if (rowCtrl) rowCtrl.pause();
+        });
+        setActiveLanes([]);
+        setGlobalPlaying(false);
+        return;
+      }
+
+      orderedStems.forEach((row) => {
+        const rowCtrl = laneControllers.current[row.id];
+        if (!rowCtrl || row.id !== laneId) {
+          if (rowCtrl && row.id !== laneId) rowCtrl.pause();
+          return;
+        }
+
+        rowCtrl.setTime(globalCurrentTime);
+        rowCtrl.setVolume(row.isMuted ? 0 : row.volume);
+        rowCtrl.play();
+      });
+
+      setActiveLanes([laneId]);
+      setGlobalPlaying(false);
+    },
+    [globalCurrentTime, laneById, orderedStems, setActiveLanes, setGlobalPlaying]
+  );
+
+  const canInteract = status === "idle" || status === "failed" || status === "complete";
+
+  const handleClear = useCallback(() => {
+    clear();
+    setValidationMessage(null);
+    setSourcePeaks([]);
+    setLatestJob(null);
+    setSavedZip(false);
+    persistedJobRef.current = null;
+    setInsights("", { measured: [], inferred: [], estimated: [], unknown: [] });
+    setInsightStatus("idle");
+  }, [clear, setInsights, setInsightStatus]);
+
+  const fileSummary = sourceName && sourceSize
+    ? `${sourceName} • ${formatBytes(sourceSize)} • ${formatDuration(sourceDuration)}`
+    : "No source loaded";
+
+  const estimatedText =
+    estimatedRemainingMs == null ? "estimating" : `${Math.ceil(estimatedRemainingMs / 1000)}s`;
+
+  const stateLabel = STAGE_TEXT[status] ?? "Ready";
+  const hasStemSourceAsset = getProjectAudioAssets(project).some(
+    (asset) =>
+      asset.status === "ready" &&
+      (asset.kind === "full_song" || asset.kind === "beat" || asset.kind === "stem")
+  );
 
   return (
-    <ProjectGate>
-      <div className={styles.layout}>
-        <Sidebar
-          activePage="stem-splitter"
-          activeEra={activeEra}
-          onEraChange={handleEraChange}
-          savedCount={0}
-        />
-
-        <main className={styles.contentArea}>
-          <header className={styles.header}>
-            <div>
-              <div className={styles.title}>Stem Splitter</div>
-              <div className={styles.subtitle}>
-                {project?.name ?? "Select a project"} / htdemucs
-              </div>
-            </div>
-            <button className={styles.resetButton} onClick={reset} disabled={!sourceFile && !job}>
-              Reset
-            </button>
-          </header>
-
-          <div className={styles.divider} />
-
-          <section className={styles.metricsBar} aria-label="Stem split settings">
-            <div className={styles.metricItem}>
-              <span>Model</span>
-              <strong>htdemucs</strong>
-            </div>
-            <div className={styles.metricItem}>
-              <span>Output</span>
-              <strong>4 stems</strong>
-            </div>
-            <div className={styles.metricItem}>
-              <span>Limit</span>
-              <strong>50 MB</strong>
-            </div>
-            <div className={styles.metricItem}>
-              <span>Status</span>
-              <strong>{statusLabel(currentStatus)}</strong>
-            </div>
-          </section>
-
-          <section className={styles.centerCanvas}>
-            {!sourceFile && !job && (
-              <div
-                className={`${styles.uploadZone} ${dragOver ? styles.uploadZoneActive : ""}`}
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-                role="button"
-                tabIndex={0}
-                aria-label="Upload a song or beat"
-              >
-                <AnimatedDashedBorder />
-                <UploadArrowIcon className={styles.uploadIcon} />
-                <span className={styles.uploadPrimary}>Drop a full song or beat</span>
-                <span className={styles.uploadSecondary}>.wav or .mp3 / 50 MB max</span>
-                {errorText && <span className={styles.uploadError}>{errorText}</span>}
-              </div>
-            )}
-
-            {busy && <ProcessingState job={job} />}
-
-            {job?.status === "failed" && (
-              <div className={styles.failurePanel} aria-live="polite">
-                <div className={styles.failureTitle}>Split failed</div>
-                <div className={styles.failureText}>
-                  {job.error || errorText || "Demucs could not separate this file."}
-                </div>
-                <button className={styles.retryButton} onClick={() => fileInputRef.current?.click()}>
-                  Try another file
-                </button>
-              </div>
-            )}
-
-            {job?.status === "complete" && stems.length === 4 && (
-              <div className={styles.resultsWrap}>
-                <div className={styles.resultsGrid}>
-                  {stems.map((stem, index) => (
-                    <StemCard key={stem.name} stem={stem} index={index} />
-                  ))}
-                </div>
-                <p className={styles.qualityNote}>
-                  Separation quality depends on the original mix. Stems from loud,
-                  compressed masters may bleed slightly — that&apos;s normal.
-                </p>
-              </div>
-            )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              className={styles.hiddenInput}
-              onChange={handleInput}
+    <StudioShell
+      activePage="stem-splitter"
+      savedCount={project?.vocal_versions?.length ?? 0}
+      contentClassName={styles.contentArea}
+    >
+      <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minWidth: 0, overflow: "hidden" }}>
+        <header className="globalToolHeader">
+          <div className="globalToolHeaderTitle">
+            <span>Isolation</span>
+            <h1>Stem Rip</h1>
+          </div>
+          <div className="globalToolHeaderPickers">
+            <AudioAssetPicker
+              label="Source"
+              value={selectedSourceAsset?.id ?? selectedSourceAssetId}
+              onChange={setSelectedSourceAssetId}
+              allowedKinds={["full_song", "beat", "stem"]}
+              preferredKinds={["full_song"]}
+              emptyLabel="Song or stem"
+              variant="compact"
             />
-          </section>
+          </div>
+        </header>
 
-          <footer className={styles.transport} aria-label="Stem splitter transport">
-            <div className={styles.transportLeft}>
-              <span className={`${styles.statusDot} ${busy ? styles.statusDotLive : ""}`} />
-              <span>{statusLabel(currentStatus)}</span>
-            </div>
-            <div className={styles.transportCenter}>
-              <span>{sourceFile?.name ?? "No source loaded"}</span>
-              {sourceFile && <span>{formatFileSize(sourceFile.size)}</span>}
-            </div>
-            <div className={styles.transportRight}>
-              <span>{job?.job_id ? `Job ${job.job_id.slice(0, 8)}` : "Poll 3s"}</span>
-            </div>
-          </footer>
-        </main>
+      <ToolLockedOverlay
+        key={project ? `${project.id}:stem-splitter` : "stem-splitter"}
+        locked={!hasStemSourceAsset}
+        momentKey={project ? `${project.id}:stem-splitter` : "stem-splitter"}
+      >
+          <motion.header
+            className={styles.header}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+          >
 
-        <MobileTabBar activePage="stem-splitter" />
+            <div className={styles.modeSelector}>
+              {MODE_OPTIONS.map((item) => {
+                const isUnavailable = item === 6 && !sixStemAvailable;
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    className={styles.modePill}
+                    data-active={mode === item}
+                    data-disabled={isUnavailable}
+                    disabled={isUnavailable || !canInteract}
+                    onClick={() => onModeClick(item)}
+                  >
+                    {item}-stem
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                className={styles.resetButton}
+                onClick={handleClear}
+                disabled={status === "uploading" || status === "queued" || status === "processing"}
+              >
+                Reset
+              </button>
+            </div>
+          </motion.header>
+
+          <motion.main
+            className={styles.contentPanel}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {status === "idle" || status === "failed" || status === "uploading" ? (
+              <section key="idle" className={styles.card}>
+                {!hasStemSourceAsset ? (
+                  <div style={{ opacity: 0.3, pointerEvents: "none", display: "grid", gap: "10px" }}>
+                    <div className={styles.transportWrap} style={{ borderTop: "none", paddingTop: 0 }}>
+                      <button className={styles.globalPlayButton} disabled><span>▶</span><span>Play / Pause All</span></button>
+                      <input type="range" className={styles.seekBar} disabled />
+                    </div>
+                    <div className={styles.laneStack}>
+                      {["vocals", "drums", "bass", "other"].map((name, i) => (
+                        <div key={name} className={styles.laneCard}>
+                          <div className={styles.laneHeader}>
+                            <div className={styles.laneTitleWrap}>
+                              <span className={styles.laneChip} style={{ borderColor: ["#CBFF1E", "#FF6B6B", "#4FACFE", "#A770EF"][i] }}>{name.toUpperCase()}</span>
+                            </div>
+                            <div className={styles.laneControls}>
+                              <button className={styles.playButton} disabled>▶</button>
+                              <button className={styles.toggleButton} disabled>M</button>
+                              <button className={styles.toggleButton} disabled>S</button>
+                              <input type="range" className={styles.volumeRange} disabled />
+                            </div>
+                          </div>
+                          <div className={styles.laneWaveform}>
+                            <div className={styles.sourceWaveform}>
+                              {Array.from({ length: 42 }).map((_, idx) => (
+                                <span key={idx} className={styles.sourceWaveBar} style={{ height: `${18 + (((idx + i * 3) % 9) * 5)}%` }} />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                <div className={styles.emptyPanel}>
+
+                  <button
+                    type="button"
+                    className={styles.globalPlayButton}
+                    onClick={() => void handleSelectedAssetSplit()}
+                    disabled={!selectedSourceAsset || status === "uploading"}
+                  >
+                    Split selected asset
+                  </button>
+
+                  <div className={styles.fileChips}>
+                    {ACCEPTED_EXTENSIONS.map((ext) => (
+                      <span key={ext} className={styles.fileChip}>
+                        {ext.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
+
+                  {validationMessage ? <p className={styles.errorText}>{validationMessage}</p> : null}
+                  {error ? <p className={styles.errorText}>{error}</p> : null}
+
+                  {sourceUrl ? (
+                    <section className={styles.previewStrip}>
+                      <div className={styles.previewTitle}>Source preview</div>
+                      <div>{fileSummary}</div>
+                      <SourceWaveform peaks={sourcePeaks} />
+                    </section>
+                  ) : null}
+                </div>
+                )}
+              </section>
+            ) : (
+              <AnimatePresence mode="wait">
+                <motion.section
+                  key="work"
+                  className={styles.card}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                >
+                  <section className={styles.statusPanel}>
+                    <div>
+                      <div className={styles.statusTitle}>Source</div>
+                      <div className={styles.statusMeta}>{fileSummary}</div>
+                      <div className={styles.statusMeta}>
+                        Duration {formatDuration(sourceDuration)} • BPM {sourceBpm ?? "--"}
+                      </div>
+                    </div>
+
+                    <SourceWaveform peaks={sourcePeaks} />
+
+                    <div className={styles.progressWrap}>
+                      <div className={styles.progressText}>
+                        {stateLabel}: {Math.round(progress)}%
+                        <span className={styles.stageBadge}>{stage}</span>
+                      </div>
+
+                      <div className={styles.progressTrack}>
+                        <div
+                          className={styles.progressBar}
+                          style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+                        />
+                      </div>
+
+                      <div className={styles.statusHint}>{message}</div>
+                      {estimatedRemainingMs != null && status !== "complete" ? (
+                        <div className={styles.statusHint}>ETA {estimatedText}</div>
+                      ) : null}
+                      {status === "complete" ? <div className={styles.statusHint}>Split complete.</div> : null}
+                    </div>
+                  </section>
+
+                  {status === "complete" ? (
+                    <>
+                      <section className={styles.transportWrap}>
+                        <button
+                          type="button"
+                          className={styles.globalPlayButton}
+                          onClick={handleGlobalPlayPause}
+                          disabled={orderedStems.length === 0 || !hasAudibleLane}
+                          aria-label={globalPlaying ? "Pause all stems" : "Play all stems"}
+                        >
+                          <span>{globalPlaying ? "II" : "▶"}</span>
+                          <span>Play / Pause All</span>
+                        </button>
+
+                        <input
+                          type="range"
+                          className={styles.seekBar}
+                          min={0}
+                          max={totalDuration}
+                          step={0.02}
+                          value={Math.min(globalCurrentTime, totalDuration)}
+                          onChange={handleGlobalSeek}
+                          onMouseUp={handleGlobalSeekRelease}
+                          onPointerUp={handleGlobalSeekRelease}
+                          onTouchEnd={handleGlobalSeekRelease}
+                          aria-label="Seek stems"
+                        />
+
+                        <div className={styles.timeReadout}>
+                          {formatDuration(globalCurrentTime)} / {formatDuration(totalDuration)}
+                        </div>
+                      </section>
+
+                      <section className={styles.laneStack}>
+                        {orderedStems.map((lane) => (
+                          <LaneWaveformCard
+                            key={lane.id}
+                            lane={lane}
+                            color={STEM_COLORS[lane.name] || "#8f8f8f"}
+                            isAudible={audibleLaneIds.includes(lane.id)}
+                            onController={updateLaneController}
+                            onMute={(id, muted) => {
+                              setLaneMute(id, muted);
+                            }}
+                            onSolo={(id) => {
+                              toggleLaneSolo(id);
+                            }}
+                            onVolume={(id, value) => {
+                              setLaneVolume(id, value);
+                            }}
+                            onPlayPause={onLanePlayPause}
+                          />
+                        ))}
+                      </section>
+
+                      {fallback ? (
+                        <section className={styles.fallbackNotice}>
+                          {fallback.reason} {fallback.delivered_stems.length} stem lane(s) returned.
+                        </section>
+                      ) : null}
+
+                      <section className={styles.downloadRow}>
+                        <a
+                          className={styles.downloadButton}
+                          href={jobId ? `/api/split-stems/${jobId}/zip` : "#"}
+                          download="stems.zip"
+                          aria-label="Download all stems as zip"
+                        >
+                          Download all as ZIP
+                        </a>
+                        <span className={styles.saveStatus}>
+                          {savedZip ? "Saved in project" : ""}
+                        </span>
+                      </section>
+
+                      <InsightPanel
+                        status={insightStatus}
+                        summary={insightText}
+                        claims={insightClaims}
+                      />
+                    </>
+                  ) : null}
+                </motion.section>
+              </AnimatePresence>
+            )}
+          </motion.main>
+      </ToolLockedOverlay>
       </div>
-    </ProjectGate>
+
+    </StudioShell>
   );
 }
