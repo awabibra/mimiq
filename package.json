@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "next dev",
+    "dev:audio": "backend/venv/bin/python -m uvicorn main:app --app-dir backend --reload --host 127.0.0.1 --port 8000",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",

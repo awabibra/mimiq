@@ -9,16 +9,14 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "dummy-key"
 );
 
-// Era color lookup — mirrors lib/eras.ts for the edge runtime
+// Kept local because this route runs on the edge.
 const eraColors: Record<string, { accent: string; name: string }> = {
-  nocturnal: { accent: "#C4547A", name: "Nocturnal" },
-  volatile: { accent: "#7B5FD4", name: "Volatile" },
-  current: { accent: "#4AAD6A", name: "Current" },
-  golden: { accent: "#D4A84B", name: "Golden" },
-  crystalline: { accent: "#4ABCBC", name: "Crystalline" },
+  modern_rap: { accent: "#D4A84B", name: "Modern Rap" },
+  trap: { accent: "#7B5FD4", name: "Trap" },
+  rnb: { accent: "#C4547A", name: "R&B" },
+  pop: { accent: "#4ABCBC", name: "Pop" },
 };
 
-/** Convert a hex color like "#C4547A" to an rgba string at the given alpha. */
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);

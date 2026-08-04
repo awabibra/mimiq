@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase";
 import type {
   AudioAssetKind,
   AudioAssetStatus,
+  ProcessedVocalStage,
   Project,
   ProjectAudioAsset,
 } from "@/lib/types";
@@ -42,6 +43,10 @@ function isAudioAssetKind(value: unknown): value is AudioAssetKind {
     value === "reference" ||
     value === "processed"
   );
+}
+
+function isProcessedVocalStage(value: unknown): value is ProcessedVocalStage {
+  return value === "main_chain" || value === "buses" || value === "match_beat";
 }
 
 function legacyAsset(params: {
@@ -89,6 +94,20 @@ export function normalizeAudioAsset(value: unknown): ProjectAudioAsset | null {
     createdAt: typeof asset.createdAt === "string" ? asset.createdAt : new Date().toISOString(),
     status: isAudioAssetStatus(asset.status) ? asset.status : "ready",
     error: typeof asset.error === "string" ? asset.error : null,
+    processingStage: isProcessedVocalStage(asset.processingStage)
+      ? asset.processingStage
+      : null,
+    sourceAssetId:
+      typeof asset.sourceAssetId === "string" ? asset.sourceAssetId : null,
+    alignedBeatAssetId:
+      typeof asset.alignedBeatAssetId === "string"
+        ? asset.alignedBeatAssetId
+        : null,
+    timelineStartSeconds:
+      typeof asset.timelineStartSeconds === "number" &&
+      Number.isFinite(asset.timelineStartSeconds)
+        ? Math.max(0, asset.timelineStartSeconds)
+        : null,
   };
 }
 
@@ -148,6 +167,30 @@ export function getFullSongAsset(project: Project | null | undefined) {
   return getAssetsByKind(project, "full_song").find((asset) => asset.status === "ready") ?? null;
 }
 
+export function getProcessedVocalAsset(
+  project: Project | null | undefined,
+  stage?: ProcessedVocalStage
+) {
+  return (
+    getAssetsByKind(project, "processed").find(
+      (asset) =>
+        asset.status === "ready" &&
+        (!stage || asset.processingStage === stage)
+    ) ?? null
+  );
+}
+
+export function getLatestProcessedVocalAsset(
+  project: Project | null | undefined
+) {
+  return (
+    getProcessedVocalAsset(project, "match_beat") ??
+    getProcessedVocalAsset(project, "buses") ??
+    getProcessedVocalAsset(project, "main_chain") ??
+    getProcessedVocalAsset(project)
+  );
+}
+
 export function getPrimaryVocalOrFullSongAsset(project: Project | null | undefined) {
   return getPrimaryVocalAsset(project) ?? getFullSongAsset(project);
 }
@@ -160,6 +203,16 @@ export function upsertProjectAudioAsset(
   return [asset, ...next];
 }
 
+export function updateProjectAudioAsset(
+  assets: ProjectAudioAsset[],
+  assetId: string,
+  patch: Partial<ProjectAudioAsset>
+) {
+  return assets.map((asset) =>
+    asset.id === assetId ? { ...asset, ...patch } : asset
+  );
+}
+
 export function createStoredAudioAsset(params: {
   kind: AudioAssetKind;
   filename: string;
@@ -168,6 +221,13 @@ export function createStoredAudioAsset(params: {
   duration?: number | null;
   storagePath: string;
   createdAt?: string;
+  metadata?: Pick<
+    ProjectAudioAsset,
+    | "processingStage"
+    | "sourceAssetId"
+    | "alignedBeatAssetId"
+    | "timelineStartSeconds"
+  >;
 }) {
   return {
     id: newAssetId(),
@@ -180,6 +240,7 @@ export function createStoredAudioAsset(params: {
     createdAt: params.createdAt ?? new Date().toISOString(),
     status: "ready" as const,
     error: null,
+    ...params.metadata,
   };
 }
 
@@ -231,6 +292,13 @@ export function validateProjectAudioFile(file: File) {
 export async function prepareAudioFile(params: {
   kind: AudioAssetKind;
   file: File;
+  metadata?: Pick<
+    ProjectAudioAsset,
+    | "processingStage"
+    | "sourceAssetId"
+    | "alignedBeatAssetId"
+    | "timelineStartSeconds"
+  >;
 }) {
   const copiedFile = await copyAudioFile(params.file);
   const validationError = validateProjectAudioFile(copiedFile);
@@ -248,6 +316,7 @@ export async function prepareAudioFile(params: {
     createdAt: new Date().toISOString(),
     status: "uploading",
     error: null,
+    ...params.metadata,
   };
 
   return { asset, file: copiedFile };

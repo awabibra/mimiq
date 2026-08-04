@@ -5,9 +5,9 @@ import Link from "next/link";
 import { motion, useInView } from "framer-motion";
 import styles from "./ToolStories.module.css";
 
-/* ─────────────────────────────────────────────────────────
+/*
    Utilities
-   ───────────────────────────────────────────────────────── */
+ */
 
 function Rise({
   children,
@@ -98,9 +98,7 @@ function wave(
   return pts.join(" ");
 }
 
-/* ─────────────────────────────────────────────────────────
-   01 — CHAIN LAB: animated plugin signal chain
-   ───────────────────────────────────────────────────────── */
+/* Chain Lab graphic */
 
 const PLUGINS = [
   { type: "EQ",   name: "High-pass", param: "80 Hz · 18dB", c: "#cbff1e" },
@@ -181,9 +179,7 @@ function ChainSVG() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   02 — STEM RIP: source → 4 colour stems
-   ───────────────────────────────────────────────────────── */
+/* Stem Rip graphic */
 
 const SRC_WV  = wave(580, 40, 20, 0.028, 0.5);
 const VOC_WV  = wave(136, 28, 14, 0.052, 1.2);
@@ -256,9 +252,7 @@ function StemSVG() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   03 — VOCAL CHECK: EQ spectrum + flagged zones
-   ───────────────────────────────────────────────────────── */
+/* Vocal Check graphic */
 
 const SPECTRUM_LINE =
   "M20,178 L45,170 L70,156 L95,138 L120,118 L145,102 L165,90 L185,82 " +
@@ -336,9 +330,7 @@ function VocalCheckSVG() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   04 — MIX SESSION: 5-channel mixing console
-   ───────────────────────────────────────────────────────── */
+/* Mix Session graphic */
 
 const SESSION_CH = [
   { name: "KICK",   gain: 0.72, color: "#ff6b6b", vus: [18, 25, 14, 8],  panLabel: "C"  },
@@ -373,7 +365,6 @@ function MixSessionSVG() {
                 fill={`${ch.color}06`} stroke={`${ch.color}28`} strokeWidth="1" />
             )}
 
-            {/* Channel name */}
             <text x={bx + 45} y="28" textAnchor="middle"
               fill={isVocal ? ch.color : "rgba(255,255,255,0.22)"}
               fontSize="7.5" fontFamily="'JetBrains Mono',monospace"
@@ -381,7 +372,6 @@ function MixSessionSVG() {
               {ch.name}
             </text>
 
-            {/* VU bars (4 per channel) */}
             {ch.vus.map((h, b) => (
               <rect key={b} x={bx + 9 + b * 19} y={92 - h} width="13" height={h} rx="1.5"
                 fill={ch.color} opacity="0.3">
@@ -397,17 +387,14 @@ function MixSessionSVG() {
               </rect>
             ))}
 
-            {/* Fader track */}
             <line x1={bx + 45} y1={trackTop} x2={bx + 45} y2={trackBot}
               stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
-            {/* Unity mark */}
             <line x1={bx + 39} y1={trackTop + (trackBot - trackTop) * 0.08}
               x2={bx + 51} y2={trackTop + (trackBot - trackTop) * 0.08}
               stroke="rgba(255,255,255,0.06)" strokeWidth="0.5" />
             <text x={bx + 56} y={trackTop + (trackBot - trackTop) * 0.08 + 3}
               fill="rgba(255,255,255,0.1)" fontSize="5.5" fontFamily="'JetBrains Mono',monospace">0</text>
 
-            {/* Fader thumb */}
             <rect x={bx + 33} y={thumbY - 5} width="24" height="10" rx="2.5"
               fill={isVocal ? ch.color : "#1c1c1c"}
               stroke={isVocal ? ch.color : "rgba(255,255,255,0.18)"}
@@ -415,7 +402,6 @@ function MixSessionSVG() {
             <line x1={bx + 35} y1={thumbY} x2={bx + 55} y2={thumbY}
               stroke={isVocal ? "#080808" : "rgba(255,255,255,0.18)"} strokeWidth="0.5" />
 
-            {/* Pan label */}
             <text x={bx + 45} y="194" textAnchor="middle"
               fill="rgba(255,255,255,0.14)" fontSize="6.5" fontFamily="'JetBrains Mono',monospace">
               {ch.panLabel}
@@ -424,7 +410,6 @@ function MixSessionSVG() {
         );
       })}
 
-      {/* Master bus */}
       <rect x="582" y="10" width="140" height="192" rx="7"
         fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
       <text x="652" y="28" textAnchor="middle"
@@ -432,7 +417,6 @@ function MixSessionSVG() {
         MASTER
       </text>
 
-      {/* L/R VU columns */}
       {[{ x: 600, h: 52, dur: "0.88s" }, { x: 618, h: 47, dur: "1.1s" }].map((m, mi) => (
         <g key={mi}>
           <rect x={m.x} y={92 - m.h} width="12" height={m.h} rx="2" fill="#cbff1e" opacity="0.22">
@@ -450,14 +434,12 @@ function MixSessionSVG() {
         </g>
       ))}
 
-      {/* Master fader */}
       <line x1="652" y1="112" x2="652" y2="174" stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
       <rect x="640" y="116" width="24" height="10" rx="2.5"
         fill="#1c1c1c" stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
       <line x1="642" y1="121" x2="662" y2="121"
         stroke="rgba(255,255,255,0.18)" strokeWidth="0.5" />
 
-      {/* Output readout */}
       <rect x="600" y="150" width="84" height="18" rx="3"
         fill="rgba(0,0,0,0.4)" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
       <text x="642" y="163" textAnchor="middle" fill="#cbff1e"
@@ -465,7 +447,6 @@ function MixSessionSVG() {
         −2.1 dBFS
       </text>
 
-      {/* Ready badge */}
       <text x="652" y="196" textAnchor="middle"
         fill="rgba(203,255,30,0.45)" fontSize="7" fontFamily="'JetBrains Mono',monospace" letterSpacing="0.08em">
         READY
@@ -474,9 +455,7 @@ function MixSessionSVG() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   05 — LEVEL LAB: before / after waveform + scan
-   ───────────────────────────────────────────────────────── */
+/* Level Lab graphic */
 
 const RAW_PATH  = wave(750, 110, 44, 0.022, 0.0);
 const PROC_PATH = wave(750, 110, 20, 0.022, 0.0);
@@ -543,9 +522,7 @@ function LevelLabSVG() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   06 — THE STASH: saved chain card grid
-   ───────────────────────────────────────────────────────── */
+/* Vault graphic */
 
 const STASH_CHAINS = [
   { name: "Balanced & Present", genre: "Hip-Hop", steps: 4, active: true  },
@@ -578,10 +555,7 @@ function StashCard({ chain, index }: { chain: (typeof STASH_CHAINS)[0]; index: n
   );
 }
 
-/* ─────────────────────────────────────────────────────────
-   Section wrappers — new order: Chain Lab → Stem Rip →
-   Vocal Check → Collision Check → E-Val → Vault
-   ───────────────────────────────────────────────────────── */
+/* Landing sections */
 
 function ChainLabSection() {
   return (
@@ -690,9 +664,9 @@ function TheStashSection() {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
+/*
    Closing CTA
-   ───────────────────────────────────────────────────────── */
+ */
 
 function ClosingSection({ startHref }: { startHref: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -723,9 +697,9 @@ function ClosingSection({ startHref }: { startHref: string }) {
   );
 }
 
-/* ─────────────────────────────────────────────────────────
+/*
    Main export
-   ───────────────────────────────────────────────────────── */
+ */
 
 export function ToolStories({ startHref }: { startHref: string }) {
   return (

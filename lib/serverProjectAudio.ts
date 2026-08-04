@@ -74,6 +74,10 @@ async function getRequestUserId(req: Request) {
   return data.user.id;
 }
 
+export async function assertAuthenticatedRequest(req: Request) {
+  return getRequestUserId(req);
+}
+
 async function getOwnedProject(req: Request, projectId: string) {
   const userId = await getRequestUserId(req);
   const supabase = serviceClient();
@@ -100,6 +104,53 @@ async function getOwnedProject(req: Request, projectId: string) {
 }
 
 export async function resolveProjectAssetFile(params: {
+  req: Request;
+  projectId: string | null;
+  assetId: string | null;
+  allowedKinds?: ProjectAudioAsset["kind"][];
+  label: string;
+}) {
+  const owned = await assertProjectAssetOwnership(params);
+  if (!owned) return null;
+  const { asset, supabase } = owned;
+
+  let blob: Blob;
+  if (
+    asset.storagePath?.startsWith("http://") ||
+    asset.storagePath?.startsWith("https://")
+  ) {
+    const res = await fetch(asset.storagePath);
+    if (!res.ok) {
+      throw new AssetResolutionError(
+        "asset_download_failed",
+        `${params.label} asset could not be downloaded.`,
+        502
+      );
+    }
+    blob = await res.blob();
+  } else {
+    const { data, error } = await supabase.storage
+      .from(PROJECT_FILE_BUCKET)
+      .download(asset.storagePath as string);
+    if (error || !data) {
+      throw new AssetResolutionError(
+        "asset_download_failed",
+        `${params.label} asset could not be downloaded.`,
+        502
+      );
+    }
+    blob = data;
+  }
+
+  return {
+    asset,
+    file: new File([blob], asset.filename, {
+      type: blob.type || asset.mimeType || "audio/mpeg",
+    }),
+  };
+}
+
+export async function assertProjectAssetOwnership(params: {
   req: Request;
   projectId: string | null;
   assetId: string | null;
@@ -149,40 +200,7 @@ export async function resolveProjectAssetFile(params: {
     );
   }
 
-  let blob: Blob;
-  if (
-    asset.storagePath.startsWith("http://") ||
-    asset.storagePath.startsWith("https://")
-  ) {
-    const res = await fetch(asset.storagePath);
-    if (!res.ok) {
-      throw new AssetResolutionError(
-        "asset_download_failed",
-        `${params.label} asset could not be downloaded.`,
-        502
-      );
-    }
-    blob = await res.blob();
-  } else {
-    const { data, error } = await supabase.storage
-      .from(PROJECT_FILE_BUCKET)
-      .download(asset.storagePath);
-    if (error || !data) {
-      throw new AssetResolutionError(
-        "asset_download_failed",
-        `${params.label} asset could not be downloaded.`,
-        502
-      );
-    }
-    blob = data;
-  }
-
-  return {
-    asset,
-    file: new File([blob], asset.filename, {
-      type: blob.type || asset.mimeType || "audio/mpeg",
-    }),
-  };
+  return { project, asset, supabase };
 }
 
 export function assetResolutionResponse(error: unknown) {

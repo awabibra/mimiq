@@ -65,8 +65,11 @@ export function AuthModal({
     return null;
   }
 
-  const callbackUrl = () =>
-    `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`;
+  const destinationForMode = (authMode: Mode) =>
+    authMode === "signup" ? "/onboarding" : nextPath;
+
+  const callbackUrl = (authMode: Mode) =>
+    `${window.location.origin}/auth/callback?next=${encodeURIComponent(destinationForMode(authMode))}`;
 
   const continueGoogle = async () => {
     if (busy) {
@@ -83,7 +86,7 @@ export function AuthModal({
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: callbackUrl(),
+        redirectTo: callbackUrl(mode),
         queryParams: {
           prompt: "select_account",
         },
@@ -110,13 +113,23 @@ export function AuthModal({
     setMsg(null);
 
     try {
-      const redirectTo = callbackUrl();
+      const redirectTo = callbackUrl(mode);
+      if (pendingAuthKey) {
+        sessionStorage.setItem(pendingAuthKey, "1");
+      }
       const auth =
         mode === "signin"
           ? await signIn(email, pass)
           : await signUp(email, pass, redirectTo);
 
       if (auth?.user) {
+        if (pendingAuthKey) {
+          sessionStorage.removeItem(pendingAuthKey);
+        }
+        if (mode === "signup") {
+          window.location.assign("/onboarding");
+          return;
+        }
         await onAuthed(auth.user);
         onClose?.();
         return;
@@ -124,6 +137,9 @@ export function AuthModal({
 
       setMsg("Check your email to finish sign up.");
     } catch (error) {
+      if (pendingAuthKey) {
+        sessionStorage.removeItem(pendingAuthKey);
+      }
       setMsg(error instanceof Error ? error.message : "Authentication failed.");
     } finally {
       setBusy(false);

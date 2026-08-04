@@ -110,32 +110,9 @@ function formatGain(gain: number) {
 }
 
 export function isLocalProject(project: Project | null | undefined) {
-  return Boolean(project?.id.startsWith("local-"));
-}
-
-export function createLocalProject(params: {
-  daw: string;
-  era: string;
-}): Project {
-  const now = new Date().toISOString();
-
-  return {
-    id: `local-${newClientId()}`,
-    user_id: "guest",
-    name: `${params.daw} sandbox`,
-    created_at: now,
-    updated_at: now,
-    audio_assets: [],
-    beat_file_url: null,
-    beat_filename: null,
-    vocal_versions: [],
-    current_vocal_index: 0,
-    generated_chains: [],
-    mix_room_report: null,
-    level_lab_report: null,
-    stem_split_url: null,
-    last_opened_at: now,
-  };
+  return Boolean(
+    project?.id.startsWith("local-") || project?.id.startsWith("free-")
+  );
 }
 
 function mixRoomCutStep(cuts: MixRoomEQCut[]): ChainStep {
@@ -275,6 +252,18 @@ export function getPersistedProjectId() {
   return getPersistedProject()?.id ?? null;
 }
 
+export function persistActiveProjectSnapshot(project: Project) {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.setItem(
+    ACTIVE_PROJECT_STORAGE_KEY,
+    JSON.stringify({
+      state: { project },
+      version: 0,
+    })
+  );
+}
+
 function getPersistedProject() {
   if (typeof window === "undefined") return null;
 
@@ -297,8 +286,9 @@ export async function rehydrateActiveProject() {
   if (!storedProject) return null;
 
   if (isLocalProject(storedProject)) {
-    useProject.getState().setActiveProject(storedProject);
-    return storedProject;
+    window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+    useProject.getState().clearActiveProject();
+    return null;
   }
 
   const project = await getProjectRecord(storedProject.id);

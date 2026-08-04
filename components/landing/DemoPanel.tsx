@@ -4,7 +4,6 @@ import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import styles from "./DemoPanel.module.css";
 
-/* Chain steps that type in one-by-one */
 const PRESETS = [
   {
     label: "Balanced & Present",
@@ -40,14 +39,12 @@ export function DemoPanel() {
   const rafRef    = useRef<number>(0);
   const timeRef   = useRef(0);
 
-  /* Preset cycling */
   const [presetIdx, setPresetIdx] = useState(0);
   const [visibleSteps, setVisibleSteps] = useState<string[]>([]);
   const preset = PRESETS[presetIdx];
 
-  /* Animate steps in one-by-one */
   useEffect(() => {
-    setVisibleSteps([]);
+    queueMicrotask(() => setVisibleSteps([]));
     const steps = PRESETS[presetIdx].steps;
     const timers: ReturnType<typeof setTimeout>[] = [];
     steps.forEach((_, i) => {
@@ -55,14 +52,12 @@ export function DemoPanel() {
         setVisibleSteps(prev => [...prev, steps[i]]);
       }, 500 + i * 340));
     });
-    /* After all steps shown, wait then cycle to next preset */
     timers.push(setTimeout(() => {
       setPresetIdx(p => (p + 1) % PRESETS.length);
     }, 500 + steps.length * 340 + 2200));
     return () => timers.forEach(clearTimeout);
   }, [presetIdx]);
 
-  /* Canvas oscilloscope */
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -89,7 +84,6 @@ export function DemoPanel() {
 
       const t = timeRef.current;
 
-      /* Faint grid lines */
       ctx.save();
       ctx.strokeStyle = "rgba(255,255,255,0.04)";
       ctx.lineWidth   = 0.5;
@@ -101,7 +95,6 @@ export function DemoPanel() {
       }
       ctx.restore();
 
-      /* Three layered waves */
       const waves = [
         { amp: h * 0.28, freq: 0.016, speed: 0.022, phase: 0,           alpha: 0.22, width: 1 },
         { amp: h * 0.18, freq: 0.024, speed: 0.014, phase: Math.PI / 3,  alpha: 0.14, width: 1 },
@@ -109,24 +102,22 @@ export function DemoPanel() {
       ];
 
       waves.forEach(({ amp, freq, speed, phase, alpha, width }) => {
-        /* Breathing envelope */
         const envelope = 1 + 0.18 * Math.sin(t * 0.008 + phase);
         ctx.beginPath();
         for (let x = 0; x <= w; x += 1.5) {
           const norm = x / w;
-          /* Fade edges for a vignette feel */
           const edge = Math.min(norm * 6, (1 - norm) * 6, 1);
           const y = h / 2
             + Math.sin(x * freq + t * speed + phase) * amp * envelope * edge
             + Math.sin(x * freq * 0.5 - t * speed * 0.7) * amp * 0.22 * edge;
-          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = `rgba(203,255,30,${alpha})`;
         ctx.lineWidth   = width;
         ctx.stroke();
       });
 
-      /* Scan pulse — a translucent sweep */
       const scanX = ((t * 0.4) % (w + 60)) - 30;
       const grad  = ctx.createLinearGradient(scanX - 30, 0, scanX + 30, 0);
       grad.addColorStop(0,    "transparent");
@@ -148,14 +139,12 @@ export function DemoPanel() {
 
   return (
     <div className={styles.panel}>
-      {/* Oscilloscope pane */}
       <div className={styles.scope}>
         <span className={styles.scopeLabel}>Input</span>
         <canvas ref={canvasRef} className={styles.canvas} />
         <span className={styles.scopeLabelRight}>Gain</span>
       </div>
 
-      {/* Chain pane */}
       <div className={styles.chain}>
         <div className={styles.chainHeader}>
           <AnimatePresence mode="wait">

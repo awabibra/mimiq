@@ -72,7 +72,7 @@ function normalizeRawMetrics(metrics: Partial<AudioMetrics> | null): LevelMetric
   return {
     lufs,
     dynamicRange,
-    truePeak: parseMetricNumber(metrics.truePeak ?? metrics.truePeakEstimateDb) ?? -1,
+    truePeak: parseMetricNumber(metrics.truePeak) ?? -1,
     gainRide: [],
     ...(spectralCentroid != null ? { spectralCentroid } : {}),
   };
@@ -256,7 +256,7 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
     const daw = (formData.get("daw") as string) || "Logic Pro";
-    const eraId = (formData.get("era") as string) || "golden";
+    const eraId = (formData.get("era") as string) || "modern_rap";
     const rawMetricsStr = formData.get("rawMetrics") as string | null;
     const projectId = (formData.get("projectId") as string) || null;
     const rawAssetId = (formData.get("rawAssetId") as string) || null;

@@ -27,13 +27,22 @@ export const eras: Era[] = [
     image: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=2874&auto=format&fit=crop",
   },
   {
-    id: "trap_rnb",
-    name: "Trap/R&B",
-    description: "Trap/R&B — lush verbs, nocturnal atmosphere, dynamic low end",
+    id: "trap",
+    name: "Trap",
+    description: "Trap — hard 808s, fast triplets, aggressive dynamics, dark ambience",
     accent: "#7B5FD4",
     subtleGradient:
       "linear-gradient(135deg, rgba(123, 95, 212, 0.08) 0%, rgba(123, 95, 212, 0.02) 100%)",
     image: "https://images.unsplash.com/photo-1493225457124-a1a2a5f08538?q=80&w=2940&auto=format&fit=crop",
+  },
+  {
+    id: "rnb",
+    name: "R&B",
+    description: "R&B — lush verbs, nocturnal atmosphere, dynamic low end",
+    accent: "#C4547A",
+    subtleGradient:
+      "linear-gradient(135deg, rgba(196, 84, 122, 0.08) 0%, rgba(196, 84, 122, 0.02) 100%)",
+    image: "https://images.unsplash.com/photo-1516280440503-65fef2282dc8?q=80&w=2940&auto=format&fit=crop",
   },
 ];
 

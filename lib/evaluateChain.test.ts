@@ -7,9 +7,14 @@ const baseMetrics: AudioMetrics = {
   dynamicRange: 5,
   spectralCentroid: 2200,
   truePeak: -3,
-  lowEndEnergy: 0.18,
+  harshness: 0,
+  lowMidBuildup: 0,
+  noiseFloorDb: -50,
+  sibilancePeak: -20,
+  dynamicInconsistency: 0,
   stereoWidth: 0.1,
-  reverbEstimate: 0.08,
+  crestFactor: 12,
+  spectralEnvelope: Array(30).fill(0),
 };
 
 const step = (overrides: Partial<ChainStep>): ChainStep => ({

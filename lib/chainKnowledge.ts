@@ -78,15 +78,15 @@ export type GenreProfile = {
   };
   lufs_target: number;
   dynamic_range_target: number;
+  spectral_envelope?: number[];
+  advanced_metrics?: Record<string, unknown>;
 };
 
 export type GenreName =
-  | "trap music"
+  | "modern_rap"
+  | "trap"
   | "rnb"
-  | "drill rap"
-  | "hip hop"
-  | "afrofusion"
-  | "4you";
+  | "pop";
 
 export const DAW_PLUGINS = {
   "Logic Pro": {
@@ -246,7 +246,7 @@ export const DAW_PLUGINS = {
 export type DawName = keyof typeof DAW_PLUGINS;
 
 export const GENRE_PROFILES: Record<GenreName, GenreProfile> = {
-  "trap music": {
+  trap: {
     philosophy:
       "Dark, clean, atmospheric rap vocals that sit in the pocket of hard 808s through fast FET control, sculpted low-mids, short ducked ambience, phrase-ending delay, and dense parallel compression.",
     compression: {
@@ -355,64 +355,7 @@ export const GENRE_PROFILES: Record<GenreName, GenreProfile> = {
     lufs_target: -14,
     dynamic_range_target: 6,
   },
-  "drill rap": {
-    philosophy:
-      "Dry, close, cold drill vocals with aggressive cleanup, midrange focus, tight punch-preserving compression, almost no ambience, and controlled grit for edge.",
-    compression: {
-      primary: {
-        style: "FET_1176",
-        ratio: "6:1",
-        attack_ms: 10,
-        release_ms: 60,
-        threshold_db: -26,
-        gain_reduction_db: 8,
-      },
-    },
-    eq: {
-      highpass_hz: 100,
-      subtractive: [
-        { frequency: 300, gain_db: -5, q: 1.4 },
-        { frequency: 500, gain_db: -3, q: 1.5 },
-        { frequency: 700, gain_db: -2.5, q: 1.2 },
-      ],
-      additive: [
-        { frequency: 3500, gain_db: 3, q: 1, type: "bell" },
-        { frequency: 8500, gain_db: 0.5, q: 0.8, type: "shelf" },
-      ],
-    },
-    deesser: { frequency: 6000, reduction_db: 4, mode: "moderate" },
-    gate: { threshold_db: -38, attack_ms: 1, release_ms: 60 },
-    saturation: { drive: 8, character: "transistor", mix_percent: 8 },
-    buses: {
-      reverb: {
-        decay_s: 0.3,
-        pre_delay_ms: 5,
-        mix_percent: 6,
-        sidechained: false,
-        character: "very short room glue",
-      },
-      delay: {
-        time: "1/16",
-        feedback_percent: 8,
-        mix_percent: 5,
-        automated: false,
-      },
-      parallel_comp: { ratio: "8:1", attack_ms: 8, blend_percent: 25 },
-      distortion_bus: { style: "subtle overdrive edge", blend_percent: 12 },
-      mastering: {
-        bus_comp: {
-          ratio: "4:1",
-          attack_ms: 10,
-          release_ms: 50,
-          gain_reduction_db: 3,
-        },
-        limiter_ceiling_db: -0.3,
-      },
-    },
-    lufs_target: -11,
-    dynamic_range_target: 4,
-  },
-  "hip hop": {
+  modern_rap: {
     philosophy:
       "Warm, punchy, upfront boom-bap vocal treatment built around serial 1176 into LA-2A leveling, classic low-mid cleanup, moderate room, rhythmic delay, and SSL-style glue.",
     compression: {
@@ -472,62 +415,9 @@ export const GENRE_PROFILES: Record<GenreName, GenreProfile> = {
     lufs_target: -12,
     dynamic_range_target: 5,
   },
-  afrofusion: {
+  pop: {
     philosophy:
-      "Warm melodic lead vocal that rides on top of rhythmic percussion with preserved movement, gentle compression, air and warmth together, lush timed space, and chorus-like width.",
-    compression: {
-      primary: {
-        style: "TUBE_CL1B",
-        ratio: "3:1",
-        attack_ms: 15,
-        release_ms: 150,
-        threshold_db: -20,
-        gain_reduction_db: 3.5,
-      },
-    },
-    eq: {
-      highpass_hz: 90,
-      subtractive: [{ frequency: 400, gain_db: -2, q: 1.2 }],
-      additive: [
-        { frequency: 900, gain_db: 1.5, q: 1.1, type: "bell" },
-        { frequency: 2500, gain_db: 2, q: 1, type: "bell" },
-        { frequency: 12000, gain_db: 3, q: 0.7, type: "shelf" },
-      ],
-    },
-    deesser: { frequency: 7000, reduction_db: 2.5, mode: "gentle" },
-    gate: { threshold_db: -50, attack_ms: 5, release_ms: 150 },
-    saturation: { drive: 8, character: "tape", mix_percent: 7 },
-    buses: {
-      reverb: {
-        decay_s: 1.25,
-        pre_delay_ms: 40,
-        mix_percent: 20,
-        sidechained: true,
-        character: "lush medium room",
-      },
-      delay: {
-        time: "1/4 dotted",
-        feedback_percent: 20,
-        mix_percent: 20,
-        automated: true,
-      },
-      width: { amount_percent: 35, style: "chorus" },
-      mastering: {
-        bus_comp: {
-          ratio: "2:1",
-          attack_ms: 30,
-          release_ms: 100,
-          gain_reduction_db: 1.5,
-        },
-        limiter_ceiling_db: -0.5,
-      },
-    },
-    lufs_target: -12,
-    dynamic_range_target: 5,
-  },
-  "4you": {
-    philosophy:
-      "Custom mimiq blend of R&B top-end intimacy and hip-hop punch, with values kept responsive to the user's actual loudness, range, brightness, and sibilance measurements.",
+      "Custom mimiq blend of R&B top-end intimacy and pop punch, with values kept responsive to the user's actual loudness, range, brightness, and sibilance measurements.",
     compression: {
       primary: {
         style: "FET_1176",
@@ -590,20 +480,16 @@ export const GENRE_PROFILES: Record<GenreName, GenreProfile> = {
 
 export function getGenreName(eraId: string): GenreName {
   const map: Record<string, GenreName> = {
-    trap: "trap music",
-    volatile: "trap music",
-    golden: "hip hop",
+    modern_rap: "modern_rap",
+    trap: "trap",
     rnb: "rnb",
-    nocturnal: "rnb",
-    current: "afrofusion",
-    crystalline: "drill rap",
-    foryou: "4you",
-    "4you": "4you",
+    pop: "pop",
   };
 
-  return map[eraId] ?? "hip hop";
+  return map[eraId] ?? "modern_rap";
 }
 
-export function getGenreProfile(eraId: string) {
-  return GENRE_PROFILES[getGenreName(eraId)];
+export function getGenreProfile(eraId: string): GenreProfile {
+  const baseProfileName = getGenreName(eraId);
+  return structuredClone(GENRE_PROFILES[baseProfileName]);
 }

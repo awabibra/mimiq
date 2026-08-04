@@ -1,7 +1,6 @@
 "use client";
 
 import { Sidebar } from "@/components/Sidebar";
-import { eras } from "@/lib/eras";
 import type { ChainStep } from "@/lib/types";
 import styles from "../sandbox/page.module.css";
 import { VisualVocalChain } from "../sandbox/VisualVocalChain";

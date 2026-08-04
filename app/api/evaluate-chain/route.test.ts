@@ -29,9 +29,14 @@ const metrics: AudioMetrics = {
   dynamicRange: 5,
   spectralCentroid: 2200,
   truePeak: -3,
-  lowEndEnergy: 0.18,
+  harshness: 0,
+  lowMidBuildup: 0,
+  noiseFloorDb: -50,
+  sibilancePeak: -20,
+  dynamicInconsistency: 0,
   stereoWidth: 0.1,
-  reverbEstimate: 0.08,
+  crestFactor: 12,
+  spectralEnvelope: Array(30).fill(0),
 };
 
 const chainStep = (overrides: Partial<ChainStep> = {}): ChainStep => ({
@@ -185,7 +190,7 @@ describe("/api/evaluate-chain", () => {
 
   it("returns deterministic evaluation without Anthropic", async () => {
     const response = await POST(
-      request({ chain: completeChain(), metrics, genre: "golden", daw: "Logic Pro" }) as never
+      request({ chain: completeChain(), metrics, genre: "modern_rap", daw: "Logic Pro" }) as never
     );
     const body = await json(response);
 

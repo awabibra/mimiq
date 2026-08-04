@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import type { StemSplitJobResponse } from "@/lib/types";
+import {
+  assertAuthenticatedRequest,
+  assertProjectAssetOwnership,
+  assetResolutionResponse,
+} from "@/lib/serverProjectAudio";
+import { readStemJobToken } from "@/lib/serverStemJob";
 
-function withLocalStemUrls(data: StemSplitJobResponse): StemSplitJobResponse {
+function withLocalStemUrls(
+  data: StemSplitJobResponse,
+  jobToken: string
+): StemSplitJobResponse {
   if (!data.stems) {
     return data;
   }
@@ -13,7 +22,7 @@ function withLocalStemUrls(data: StemSplitJobResponse): StemSplitJobResponse {
         key,
         {
           ...stem,
-          url: `/api/split-stems/${data.job_id}/files/${key}`,
+          url: `/api/split-stems/${data.job_id}/files/${key}?jobToken=${encodeURIComponent(jobToken)}`,
         },
       ])
     ),
@@ -31,10 +40,43 @@ async function readServiceError(res: Response) {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await context.params;
+  const url = new URL(req.url);
+  const jobToken = url.searchParams.get("jobToken") ?? "";
+  const claims = readStemJobToken(jobToken);
+  if (!claims || claims.jobId !== jobId) {
+    return NextResponse.json(
+      { error: "stem_job_forbidden", message: "Stem split job access is invalid." },
+      { status: 403 }
+    );
+  }
+
+  try {
+    const userId = await assertAuthenticatedRequest(req);
+    if (claims.projectId.startsWith("user:")) {
+      if (claims.projectId !== `user:${userId}`) {
+        return NextResponse.json(
+          { error: "stem_job_forbidden", message: "Stem split job belongs to another user." },
+          { status: 403 }
+        );
+      }
+    } else {
+      await assertProjectAssetOwnership({
+        req,
+        projectId: claims.projectId,
+        assetId: claims.sourceAssetId,
+        allowedKinds: ["full_song", "beat", "stem"],
+        label: "Stem source",
+      });
+    }
+  } catch (error) {
+    const response = assetResolutionResponse(error);
+    if (response) return response;
+    throw error;
+  }
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
 
   if (!serviceUrl) {
@@ -59,5 +101,5 @@ export async function GET(
   }
 
   const payload = (await res.json()) as StemSplitJobResponse;
-  return NextResponse.json(withLocalStemUrls(payload));
+  return NextResponse.json(withLocalStemUrls(payload, jobToken));
 }

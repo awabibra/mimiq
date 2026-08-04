@@ -4,6 +4,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import { ENTRY_AUTH_HANDOFF_KEY } from "@/lib/entryHandoff";
+import { useStore } from "@/lib/store";
+import {
+  getUserProfile,
+  isOnboardingComplete,
+} from "@/lib/userProfile";
 import styles from "./AuthGate.module.css";
 
 interface AuthGateProps {
@@ -17,9 +22,7 @@ export function AuthGate({ children, allowEntryHandoff = false }: AuthGateProps)
     if (!allowEntryHandoff || typeof window === "undefined") return false;
     return window.sessionStorage.getItem(ENTRY_AUTH_HANDOFF_KEY) === "1";
   });
-  const [ok, setOk] = useState(() => {
-    return usedEntryHandoff;
-  });
+  const [ok, setOk] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -28,16 +31,32 @@ export function AuthGate({ children, allowEntryHandoff = false }: AuthGateProps)
       window.sessionStorage.removeItem(ENTRY_AUTH_HANDOFF_KEY);
     }
 
-    getAuthSession().then((auth) => {
+    async function authenticate() {
+      const auth = await getAuthSession();
       if (!alive) return;
 
       if (!auth) {
-        router.replace("/");
+        router.replace("/auth?mode=signin&next=%2Fprojects");
         return;
       }
 
-      setOk(true);
-    });
+      try {
+        const profile = await getUserProfile(auth.user.id);
+        if (!alive) return;
+
+        if (!isOnboardingComplete(profile) || !profile?.daw) {
+          router.replace("/onboarding");
+          return;
+        }
+
+        useStore.getState().hydrateStudioProfile(profile.daw, profile.plugins);
+        setOk(true);
+      } catch {
+        router.replace("/onboarding");
+      }
+    }
+
+    void authenticate();
 
     return () => {
       alive = false;

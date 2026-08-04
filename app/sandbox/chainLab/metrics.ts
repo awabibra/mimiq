@@ -50,36 +50,13 @@ export function formatInsights(m: AudioMetrics): AudioInsights {
   };
 }
 
-function parsePresenceFromChain(chain: ChainStep[]) {
-  for (const step of chain) {
-    const role = step.role ?? "";
-    if (!/(additive|air|presence|eq)/i.test(`${role} ${step.tool}`)) continue;
-
-    const matches = Array.from(
-      step.action.matchAll(/([+\-−]?\d+(?:\.\d+)?)\s*dB\s+at\s+(\d+(?:\.\d+)?)\s*(kHz|Hz)/gi)
-    );
-    const presence = matches.find((match) => {
-      const rawFreq = Number(match[2]);
-      const hz = match[3]?.toLowerCase() === "khz" ? rawFreq * 1000 : rawFreq;
-      return hz >= 1800 && hz <= 5500;
-    });
-
-    if (presence?.[1]) {
-      const value = Number(presence[1].replace("−", "-"));
-      if (Number.isFinite(value)) return formatMetricDb(value);
-    }
-  }
-
-  return "--";
-}
-
-export function formatPresenceBand(metrics: AudioMetrics | null, chain: ChainStep[]) {
+export function formatPresenceBand(metrics: AudioMetrics | null) {
   if (metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)) {
     const presenceDb = 10 * Math.log10(Math.max(metrics.harshness, 1e-12));
     return `${presenceDb.toFixed(1)} dB`;
   }
 
-  return parsePresenceFromChain(chain);
+  return "--";
 }
 
 export function buildMetricReadouts(
@@ -169,7 +146,7 @@ export function buildMetricReadouts(
     },
     {
       label: "Presence",
-      value: formatPresenceBand(metrics, chain),
+      value: formatPresenceBand(metrics),
       source:
         metrics && typeof metrics.harshness === "number" && Number.isFinite(metrics.harshness)
           ? metricSource

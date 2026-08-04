@@ -11,10 +11,6 @@ import { getProjectAudioAssets } from "@/lib/projectAudio";
 import { isGeneratedChain, useProject } from "@/lib/useProject";
 import styles from "./page.module.css";
 
-/* ═══════════════════════════════════════════════════════════════
-   Inline SVG icons
-   ═══════════════════════════════════════════════════════════════ */
-
 function ChainLinkIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -67,17 +63,11 @@ function ShareIcon({ className }: { className?: string }) {
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Helpers
-   ═══════════════════════════════════════════════════════════════ */
-
-/** Format ISO date string to "Jun 3" style */
 function formatDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-/** Build the first-step summary line: "Tool — Action" */
 function firstStepSummary(chain: GeneratedChain): string {
   const steps = chain.chain_data.chain;
   if (!steps || steps.length === 0) return "No steps";
@@ -85,41 +75,32 @@ function firstStepSummary(chain: GeneratedChain): string {
   return `${step.tool} — ${step.action}`;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Page component
-   ═══════════════════════════════════════════════════════════════ */
-
 export default function VaultPage() {
   const router = useRouter();
   const project = useProject((state) => state.project);
 
-  /* ── State ── */
   const chains = project?.generated_chains.filter(isGeneratedChain) ?? [];
   const audioAssets = getProjectAudioAssets(project);
   const loading = false;
   const [activeEra, setActiveEra] = useState<Era>(defaultEra);
   const [toast, setToast] = useState<string | null>(null);
 
-  /* ── Era switching updates CSS variable ── */
   useEffect(() => {
     document.documentElement.style.setProperty("--accent", activeEra.accent);
   }, [activeEra]);
 
-  /* ── Handle era change ── */
   const handleEraChange = useCallback((era: Era) => {
     setActiveEra(era);
   }, []);
 
-  /* ── Show toast helper ── */
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
   }, []);
 
-  /* ── Share handler ── */
   const handleShare = useCallback(
     async (e: React.MouseEvent, chain: GeneratedChain) => {
-      e.stopPropagation(); /* Don't trigger card click */
+      e.stopPropagation();
       const shareUrl = `https://mimiq.app/chain/${chain.id}`;
       try {
         await navigator.clipboard.writeText(shareUrl);
@@ -131,7 +112,6 @@ export default function VaultPage() {
     [showToast]
   );
 
-  /* ── Open handler (navigate to sandbox with chain context) ── */
   const handleOpen = useCallback(
     (e: React.MouseEvent, chain: GeneratedChain) => {
       e.stopPropagation();
@@ -140,7 +120,6 @@ export default function VaultPage() {
     [router]
   );
 
-  /* ── Card click (same as Open) ── */
   const handleCardClick = useCallback(
     (chain: GeneratedChain) => {
       router.push(`/sandbox?chainId=${chain.id}`);
@@ -148,14 +127,9 @@ export default function VaultPage() {
     [router]
   );
 
-  /* ── Resolve era for a chain ── */
   const getChainEra = (chain: GeneratedChain): Era => {
     return getEraById(chain.genre) ?? defaultEra;
   };
-
-  /* ═══════════════════════════════════════════════════════════
-     Render
-     ═══════════════════════════════════════════════════════════ */
 
   return (
     <StudioShell
@@ -165,7 +139,6 @@ export default function VaultPage() {
     >
 
 
-        {/* ── Loading state ── */}
         {loading && (
           <div className={styles.loadingGrid}>
             {[0, 1, 2, 3].map((i) => (
@@ -178,7 +151,6 @@ export default function VaultPage() {
           </div>
         )}
 
-	        {/* ── Empty state ── */}
 	        {!loading && chains.length === 0 && audioAssets.length === 0 && (
           <div className={styles.emptyState}>
             <ChainLinkIcon className={styles.emptyIcon} />
@@ -219,7 +191,6 @@ export default function VaultPage() {
 	          </section>
 	        )}
 
-        {/* ── Chain card grid ── */}
         {!loading && chains.length > 0 && (
           <section className={styles.assetSection} aria-label="Saved chains">
             <div className={styles.header}>
@@ -240,7 +211,6 @@ export default function VaultPage() {
                     if (e.key === "Enter") handleCardClick(chain);
                   }}
                 >
-                  {/* Top row: era pill + date */}
                   <div className={styles.cardTop}>
                     <span
                       className={styles.eraPill}
@@ -263,19 +233,15 @@ export default function VaultPage() {
                     </div>
                   </div>
 
-                  {/* Step summary */}
                   <span className={styles.cardStepSummary}>
                     {firstStepSummary(chain)}
                   </span>
 
-                  {/* Analysis summary */}
                   <span className={styles.cardAnalysis}>
                     {chain.chain_data.summary || "No summary available"}
                   </span>
 
-                  {/* Bottom row: XY mini + icon buttons */}
                   <div className={styles.cardBottom}>
-                    {/* XY mini-display */}
                     <div className={styles.xyMini}>
                       <div
                         className={styles.xyMiniDot}
@@ -287,7 +253,6 @@ export default function VaultPage() {
                       />
                     </div>
 
-                    {/* Icon buttons */}
                     <div className={styles.cardActions}>
                       <button
                         className={styles.iconBtn}
@@ -313,7 +278,6 @@ export default function VaultPage() {
             </div>
           </section>
         )}
-      {/* ── Toast ── */}
       {toast && <div className={styles.toast}>{toast}</div>}
     </StudioShell>
   );

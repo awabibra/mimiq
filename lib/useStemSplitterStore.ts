@@ -38,6 +38,7 @@ interface StemSplitterStoreState {
   mode: StemSplitMode;
 
   jobId: string | null;
+  jobToken: string | null;
   status: StemSplitStatus;
   progress: number;
   stage: string;
@@ -71,6 +72,7 @@ interface StemSplitterStoreState {
   setMode: (mode: StemSplitMode) => void;
   setUploadedMetadata: (payload: {
     jobId: string;
+    jobToken: string;
     requestedMode: StemSplitMode;
     requestedModel: string;
   }) => void;
@@ -96,6 +98,7 @@ const DEFAULT_STEM_MODEL = "htdemucs";
 
 const STEM_COLORS: StemSplitLaneName[] = [
   "vocals",
+  "instrumental",
   "drums",
   "bass",
   "piano",
@@ -155,6 +158,7 @@ const defaultStatus = () => ({
   mode: 4 as StemSplitMode,
 
   jobId: null,
+  jobToken: null,
   status: "idle" as StemSplitStatus,
   progress: 0,
   stage: "Ready",
@@ -186,6 +190,7 @@ const persistSubset = (state: StemSplitterStoreState) => ({
   sixStemAvailable: state.sixStemAvailable,
   mode: state.mode,
   jobId: state.jobId,
+  jobToken: state.jobToken,
   status: state.status,
   progress: state.progress,
   stage: state.stage,
@@ -219,6 +224,7 @@ export const useStemSplitterStore = create<StemSplitterStoreState>()(
           sourceWaveform: [],
           sourceBpm: null,
           jobId: null,
+          jobToken: null,
           status: "uploading",
           progress: 0,
           stage: "Uploading",
@@ -263,9 +269,10 @@ export const useStemSplitterStore = create<StemSplitterStoreState>()(
         });
       },
 
-      setUploadedMetadata({ jobId, requestedMode, requestedModel }) {
+      setUploadedMetadata({ jobId, jobToken, requestedMode, requestedModel }) {
         set({
           jobId,
+          jobToken,
           requestedMode,
           requestedModel: requestedModel || DEFAULT_STEM_MODEL,
           status: "queued",
@@ -306,6 +313,7 @@ export const useStemSplitterStore = create<StemSplitterStoreState>()(
 
         set({
           jobId: job.job_id,
+          jobToken: job.job_token ?? get().jobToken,
           status: job.status as StemSplitStatus,
           progress: clampProgress(job.progress),
           stage: job.stage,

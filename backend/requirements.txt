@@ -10,3 +10,4 @@ torchcodec==0.14.0
 pydantic==2.10.3
 supabase==2.5.3
 python-dotenv==1.0.1
+pyloudnorm==0.1.1

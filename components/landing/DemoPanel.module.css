@@ -1,6 +1,4 @@
-/* DemoPanel.module.css — reference-faithful, Apple-precise */
-
-/* Outer card — very subtle elevation */
+/* Demo panel */
 .panel {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -18,7 +16,7 @@
   width: 100%;
 }
 
-/* ── Left: oscilloscope ─────────────────────────────── */
+/* Left: oscilloscope */
 .scope {
   position: relative;
   display: flex;
@@ -44,7 +42,7 @@
   display: block;
 }
 
-/* Corner labels — like hardware oscilloscope */
+/* Scope labels */
 .scopeLabel,
 .scopeLabelRight {
   position: absolute;
@@ -67,7 +65,7 @@
   right: 12px;
 }
 
-/* ── Right: chain ───────────────────────────────────── */
+/* Right: chain */
 .chain {
   display: flex;
   flex-direction: column;
@@ -91,7 +89,7 @@
   letter-spacing: -0.02em;
 }
 
-/* Live dot — pulses */
+/* Live dot */
 .chainLive {
   font-size: 8px;
   color: #cbff1e;
@@ -135,7 +133,7 @@
   line-height: 1.4;
 }
 
-/* ── Responsive ─────────────────────────────────────── */
+/* Responsive */
 @media (max-width: 640px) {
   .panel {
     grid-template-columns: 1fr;

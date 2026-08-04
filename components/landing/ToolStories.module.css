@@ -1,9 +1,9 @@
 /* ToolStories.module.css
    Five tool sections + closing CTA.
    Apple-precision layout, 3D-tilted SVG cards, scroll-triggered.
-   ─────────────────────────────────────────────────────────── */
+ */
 
-/* ── Outer wrapper ──────────────────────────────────── */
+/* Outer wrapper */
 .stories {
   position: relative;
   z-index: 10;
@@ -12,7 +12,7 @@
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-/* ── Section shell ──────────────────────────────────── */
+/* Section shell */
 .story {
   display: grid;
   grid-template-columns: 1fr 1.55fr;
@@ -31,7 +31,7 @@
   grid-template-columns: 1.55fr 1fr;
 }
 
-/* ── Section text block ─────────────────────────────── */
+/* Section text block */
 .text {
   display: flex;
   flex-direction: column;
@@ -66,7 +66,7 @@
   letter-spacing: -0.008em;
 }
 
-/* ── Graphic side ───────────────────────────────────── */
+/* Graphic side */
 .graphicSide {
   width: 100%;
 }
@@ -91,7 +91,7 @@
   height: auto;
 }
 
-/* ── Vault card grid ────────────────────────────────── */
+/* Vault card grid */
 .vaultWrap {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -181,7 +181,7 @@
   color: rgba(240, 240, 237, 0.18);
 }
 
-/* ── Closing section ────────────────────────────────── */
+/* Closing section */
 .closing {
   position: relative;
   display: flex;
@@ -190,7 +190,6 @@
   min-height: 72vh;
   padding: clamp(80px, 12vh, 140px) clamp(28px, 4vw, 56px);
   overflow: hidden;
-  /* No bottom border — this is the end */
 }
 
 .closingInner {
@@ -283,7 +282,7 @@
   pointer-events: none;
 }
 
-/* ── Responsive ─────────────────────────────────────── */
+/* Responsive */
 @media (max-width: 960px) {
   .story,
   .storyFlip {

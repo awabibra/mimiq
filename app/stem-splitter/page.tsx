@@ -14,7 +14,7 @@ import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
 import { AudioAssetPicker, pickReadyAsset } from "@/components/AudioAssetPicker";
 
 import { authHeaders } from "@/lib/apiAuth";
-import { defaultEra, eras, type Era } from "@/lib/eras";
+import { defaultEra, eras } from "@/lib/eras";
 import { useStore } from "@/lib/store";
 import { isLocalProject, useProject } from "@/lib/useProject";
 import { saveProjectPatch } from "@/lib/projects";
@@ -73,6 +73,7 @@ const STAGE_TEXT: Record<StemSplitStatus, string> = {
 };
 const STEM_LABELS: Record<string, string> = {
   vocals: "Vocals",
+  instrumental: "Instrumental",
   drums: "Drums",
   bass: "Bass",
   piano: "Piano",
@@ -81,6 +82,7 @@ const STEM_LABELS: Record<string, string> = {
 };
 const STEM_COLORS: Record<string, string> = {
   vocals: "#39c0ff",
+  instrumental: "#d7ff3f",
   drums: "#f85f75",
   bass: "#6b60ff",
   piano: "#67e18a",
@@ -89,11 +91,12 @@ const STEM_COLORS: Record<string, string> = {
 };
 const STEM_ORDER: Record<string, number> = {
   vocals: 0,
-  drums: 1,
-  bass: 2,
-  piano: 3,
-  guitar: 4,
-  other: 5,
+  instrumental: 1,
+  drums: 2,
+  bass: 3,
+  piano: 4,
+  guitar: 5,
+  other: 6,
 };
 
 function formatBytes(value: number) {
@@ -465,7 +468,7 @@ function InsightPanel({
 }
 
 export default function StemSplitterPage() {
-  const { daw: activeEraDaw, setEra } = useStore();
+  const { daw: activeEraDaw } = useStore();
   const activeEra = eras.find((era) => era.id === activeEraDaw) || defaultEra;
   const project = useProject((state) => state.project);
   const updateProject = useProject((state) => state.updateProject);
@@ -496,6 +499,7 @@ export default function StemSplitterPage() {
     estimatedRemainingMs,
     error,
     jobId,
+    jobToken,
     stems,
     fallback,
     sixStemAvailable,
@@ -739,6 +743,7 @@ export default function StemSplitterPage() {
         const job = (await response.json()) as StemSplitJobResponse;
         setUploadedMetadata({
           jobId: job.job_id,
+          jobToken: job.job_token ?? "",
           requestedMode: job.requested_mode,
           requestedModel: job.requested_model,
         });
@@ -806,10 +811,14 @@ export default function StemSplitterPage() {
       }
 
       try {
-        const response = await fetch(`/api/split-stems/${jobId}`, {
+        const response = await fetch(
+          `/api/split-stems/${jobId}?jobToken=${encodeURIComponent(jobToken ?? "")}`,
+          {
           cache: "no-store",
           signal,
-        });
+          headers: await authHeaders(),
+          }
+        );
 
         if (!response.ok) {
           const reason = await parseServiceError(response);
@@ -845,7 +854,7 @@ export default function StemSplitterPage() {
       clearInterval(timer);
       pollControllerRef.current?.abort();
     };
-  }, [jobId, requestInsights, setJobError, setJobSnapshot, setSixStemAvailable, status]);
+  }, [jobId, jobToken, requestInsights, setJobError, setJobSnapshot, setSixStemAvailable, status]);
 
   const savedZipJobRef = useRef<string | null>(null);
 
@@ -863,9 +872,9 @@ export default function StemSplitterPage() {
     const zipUrl = `/api/split-stems/${jobId}/zip`;
     const existingAssets = getProjectAudioAssets(project);
 
-    if (existingAssets.some((a) => a.storage_path === zipUrl)) {
+    if (existingAssets.some((a) => a.storagePath === zipUrl)) {
       savedZipJobRef.current = jobId;
-      setSavedZip(true);
+      queueMicrotask(() => setSavedZip(true));
       return;
     }
 

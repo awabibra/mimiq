@@ -1,4 +1,4 @@
-/* Hero.module.css — Apple-precision, fully responsive */
+/* Landing hero */
 
 .hero {
   position: relative;
@@ -13,7 +13,7 @@
   gap: 0;
 }
 
-/* ── Logo wordmark ──────────────────────────────────── */
+/* Logo wordmark */
 .logoWrap {
   display: flex;
   align-items: center;
@@ -24,7 +24,7 @@
   overflow: hidden;
 }
 
-/* ── Headline ────────────────────────────────────────── */
+/* Headline */
 .headline {
   margin: 0 0 clamp(16px, 2.5vh, 28px);
   font-size: clamp(28px, 5vw, 52px);
@@ -36,7 +36,7 @@
   max-width: min(680px, 90vw);
 }
 
-/* ── Sub-copy ────────────────────────────────────────── */
+/* Sub-copy */
 .sub {
   margin: 0 0 clamp(40px, 6vh, 64px);
   font-size: clamp(14px, 1.6vw, 18px);
@@ -55,7 +55,7 @@
   }
 }
 
-/* ── CTA cluster ─────────────────────────────────────── */
+/* CTA cluster */
 .ctaRow {
   display: flex;
   flex-direction: column;
@@ -64,7 +64,7 @@
   width: 100%;
 }
 
-/* Primary pill — the one button for new users */
+/* Primary button */
 .primaryCta {
   display: inline-flex;
   align-items: center;
@@ -118,7 +118,7 @@
   transform: translateX(3px);
 }
 
-/* Sign-in — understated text link below the CTA */
+/* Sign-in link */
 .signInLink {
   font-size: clamp(12px, 1vw, 14px);
   color: rgba(244, 244, 241, 0.38);
@@ -132,7 +132,7 @@
   color: rgba(244, 244, 241, 0.72);
 }
 
-/* ── Responsive breakpoints ────────────────────────── */
+/* Responsive breakpoints */
 @media (max-width: 480px) {
   .headline {
     /* Prevent awkward 3-line wraps on 375px screens */

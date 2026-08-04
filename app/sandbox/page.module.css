@@ -1,22 +1,22 @@
 /* ============================================================
-   Sandbox — page.module.css
+   Sandbox styles
    Three-column layout: sidebar · center · right panel
    ============================================================ */
 
-/* ── Layout shell ── */
+/* Layout shell */
 .layout {
   display: flex;
   height: 100vh;
   overflow: hidden;
 }
 
-/* ── Studio workspace shell ── */
+/* Studio workspace shell */
 .studioContent {
   position: relative;
   display: grid;
   flex: 1;
   grid-template-columns: minmax(0, 1fr) 280px;
-  grid-template-rows: 74px minmax(0, 1fr) 64px;
+  grid-template-rows: 74px 86px minmax(0, 1fr) 64px;
   min-width: 0;
   overflow: hidden;
   background:
@@ -38,6 +38,7 @@
 }
 
 .metricsBar,
+.roleSelector,
 .chainWorkspace,
 .assistantPanel,
 .transportBar {
@@ -49,9 +50,10 @@
 }
 
 .metricsBar { animation-delay: 30ms; }
-.chainWorkspace { animation-delay: 90ms; }
-.assistantPanel { animation-delay: 150ms; }
-.transportBar { animation-delay: 210ms; }
+.roleSelector { animation-delay: 70ms; }
+.chainWorkspace { animation-delay: 110ms; }
+.assistantPanel { animation-delay: 170ms; }
+.transportBar { animation-delay: 230ms; }
 
 @keyframes studioReveal {
   from {
@@ -73,6 +75,139 @@
   align-items: center;
   min-width: 0;
   border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+}
+
+.roleSelector {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0.006)),
+    rgba(8, 8, 9, 0.78);
+}
+
+.roleCard {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 24px;
+  min-width: 0;
+  min-height: 60px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.01)),
+    rgba(15, 15, 16, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+  transition:
+    border-color var(--transition),
+    background var(--transition),
+    transform var(--transition);
+}
+
+.roleCardActive {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-active));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), rgba(255, 255, 255, 0.014)),
+    rgba(16, 17, 13, 0.82);
+}
+
+.roleCardMain {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 8px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.roleCardMain:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.roleCard:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-active);
+}
+
+.roleCardLabel {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roleCardState {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roleCreateButton {
+  height: 24px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.026);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    transform var(--transition),
+    opacity var(--transition);
+}
+
+.roleCreateButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.roleCreateButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.roleCreateButton:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+/* Fallback warning */
+.fallbackBanner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 22px;
+  background: rgba(255, 180, 0, 0.08);
+  border-bottom: 1px solid rgba(255, 180, 0, 0.2);
+  font-size: 11px;
+  color: rgba(255, 190, 40, 0.9);
+  letter-spacing: 0;
+  animation: studioReveal 300ms ease both;
+}
+
+.fallbackBannerIcon {
+  flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
 .metricCell {
@@ -203,7 +338,7 @@
 
 .chainWorkspace {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 3;
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr);
   min-width: 0;
@@ -268,6 +403,91 @@
   padding: 20px 22px 16px;
 }
 
+.roleStage {
+  position: relative;
+  min-height: 100%;
+}
+
+.roleSourceBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.roleEmptyState {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: calc(100vh - 310px);
+  padding: 48px 18px;
+  text-align: center;
+}
+
+.roleEmptyKicker {
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.roleEmptyState h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.roleEmptyState p {
+  max-width: 470px;
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.roleSourceNote {
+  color: var(--text-tertiary) !important;
+}
+
+.roleEmptyAction {
+  height: 38px;
+  margin-top: 24px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border-active));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    transform var(--transition),
+    opacity var(--transition);
+}
+
+.roleEmptyAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.roleEmptyAction:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.roleEmptyAction:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
 .studioDropState {
   display: grid;
   justify-items: center;
@@ -278,7 +498,7 @@
 
 .assistantPanel {
   grid-column: 2;
-  grid-row: 1 / 4;
+  grid-row: 1 / 5;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -558,7 +778,7 @@
 
 .transportBar {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 4;
   display: grid;
   grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) auto;
   align-items: center;
@@ -752,7 +972,7 @@
 @media (max-width: 900px) {
   .studioContent {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(520px, 1fr) auto auto;
+    grid-template-rows: auto auto minmax(520px, 1fr) auto auto;
     min-height: 100vh;
     height: auto;
     overflow: auto;
@@ -771,8 +991,14 @@
 
   .chainWorkspace {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;
     min-height: 560px;
+  }
+
+  .roleSelector {
+    grid-column: 1;
+    grid-row: 2;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .headerSources {
@@ -781,7 +1007,7 @@
 
   .assistantPanel {
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 4;
     border-top: 1px solid var(--border-subtle);
     border-left: 0;
   }
@@ -792,7 +1018,7 @@
 
   .transportBar {
     grid-column: 1;
-    grid-row: 4;
+    grid-row: 5;
     grid-template-columns: 1fr;
     gap: 10px;
     min-height: 148px;
@@ -820,6 +1046,11 @@
     grid-template-rows: auto minmax(0, 1fr);
   }
 
+  .roleSelector {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px;
+  }
+
   .chainCanvas {
     padding: 14px;
   }
@@ -838,7 +1069,7 @@
   }
 }
 
-/* ── Cinematic Entrance Transition ── */
+/* Cinematic Entrance Transition */
 .cinematicOverlay {
   position: fixed;
   top: 0;
@@ -928,7 +1159,7 @@
   width: 0%;
   height: 100%;
   background: var(--text-primary);
-  /* Slow cinematic fill */
+  /* Slow fill for the entry animation. */
   animation: cinematicBarFill 2.5s cubic-bezier(0.65, 0, 0.35, 1) forwards;
   animation-delay: 1s;
 }
@@ -994,7 +1225,7 @@
   to { opacity: 0; visibility: hidden; }
 }
 
-/* ── Main Workspace Grid ── */
+/* Main Workspace Grid */
 .sandboxContent {
   position: relative;
   display: grid;
@@ -1011,7 +1242,7 @@
   grid-template-rows: 1fr;
 }
 
-/* ── Center panel ── */
+/* Center panel */
 
 .center {
   grid-column: 1;
@@ -1057,7 +1288,7 @@
     filter 300ms ease;
 }
 
-/* ── Upload zone (empty state) ── */
+/* Upload zone (empty state) */
 .uploadZone {
   position: relative;
   width: 100%;
@@ -1098,7 +1329,7 @@
   color: var(--text-tertiary);
 }
 
-/* ── Beat upload (optional) ── */
+/* Beat upload (optional) */
 .beatUpload {
   position: relative;
   width: 100%;
@@ -1123,7 +1354,7 @@
   color: var(--text-tertiary);
 }
 
-/* ── Animated Dashed Border ── */
+/* Animated Dashed Border */
 .dashedSvg {
   position: absolute;
   inset: 0;
@@ -1170,7 +1401,7 @@
   100% { stroke-dashoffset: 160; }
 }
 
-/* ── Skip link ── */
+/* Skip link */
 .skipLink {
   font-size: 12px;
   color: var(--accent);
@@ -1186,7 +1417,7 @@
   opacity: 0.8;
 }
 
-/* ── Analyzing state ── */
+/* Analyzing state */
 .analysisCard {
   width: 100%;
   max-width: 480px;
@@ -1250,7 +1481,7 @@
   }
 }
 
-/* ── Analysis spinner (while check not yet shown) ── */
+/* Analysis spinner (while check not yet shown) */
 .analysisSpinner {
   width: 14px;
   height: 14px;
@@ -1264,7 +1495,7 @@
   to { transform: rotate(360deg); }
 }
 
-/* ── XY Sliders Container ── */
+/* XY Sliders Container */
 .xyContainer {
   display: flex;
   flex-direction: column;
@@ -1367,7 +1598,7 @@
   cursor: pointer;
 }
 
-/* ── XY Pad (results state) ── */
+/* XY Pad (results state) */
 .xyPad {
   position: relative;
   width: 280px;
@@ -1442,7 +1673,7 @@
   transition: box-shadow var(--transition);
 }
 
-/* ── Generate Button ── */
+/* Generate Button */
 .generateWrapper {
   display: flex;
   justify-content: center;
@@ -1561,7 +1792,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Right panel ── */
+/* Right panel */
 .right {
   grid-column: 2;
   grid-row: 1;
@@ -1588,7 +1819,7 @@
     var(--bg-secondary);
 }
 
-/* ── Right panel — empty/exploring state ── */
+/* Empty right panel */
 .rightEmpty {
   flex: 1;
   display: flex;
@@ -1613,7 +1844,7 @@
   line-height: 1.6;
 }
 
-/* ── Right panel — results state ── */
+/* Results panel */
 .chainHeader {
   display: flex;
   align-items: center;
@@ -1716,9 +1947,9 @@
   transform: none;
 }
 
-/* ── Chain steps (moved to VisualVocalChain.module.css) ── */
+/* Chain steps (moved to VisualVocalChain.module.css) */
 
-/* ── Chain action buttons ── */
+/* Chain action buttons */
 .chainActions {
   display: flex;
   gap: 10px;
@@ -1771,7 +2002,7 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
-/* ── Skeleton loading ── */
+/* Skeleton loading */
 .skeleton {
   display: flex;
   flex-direction: column;
@@ -1802,7 +2033,7 @@
   50% { opacity: 0.6; }
 }
 
-/* ── File info chip ── */
+/* File info chip */
 .fileChip {
   display: flex;
   align-items: center;
@@ -1835,14 +2066,14 @@
   color: var(--text-primary);
 }
 
-/* ── Hidden file input ── */
+/* Hidden file input */
 .hiddenInput {
   display: none;
 }
 
 
 
-/* ── Error banner (fixed, top of layout) ── */
+/* Error banner (fixed, top of layout) */
 .errorBanner {
   position: fixed;
   top: 0;
@@ -1896,14 +2127,14 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* ── Upload error inline ── */
+/* Upload error inline */
 .uploadErrorInline {
   font-size: 12px;
   color: #e87070;
   margin-top: 4px;
 }
 
-/* ── Chain summary ── */
+/* Chain summary */
 .chainSummary {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -2027,9 +2258,9 @@
   }
 }
 
-/* ════════════════════════════════════════════
-   MOBILE RESPONSIVE — below 768px
-   ════════════════════════════════════════════ */
+/*
+   Mobile layout below 768px
+ */
 @media (max-width: 768px) {
   .layout {
     flex-direction: column;
@@ -2078,7 +2309,7 @@
   }
 }
 
-/* ── Contextual Card ── */
+/* Contextual Card */
 .contextCard {
   width: 100%;
   margin-top: 8px;

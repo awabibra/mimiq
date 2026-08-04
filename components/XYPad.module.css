@@ -4,7 +4,7 @@
   align-items: flex-start;
 }
 
-/* ── Pad ── */
+/* Pad */
 .pad {
   position: relative;
   width: 248px;
@@ -16,7 +16,7 @@
   flex-shrink: 0;
 }
 
-/* ── Axis labels ── */
+/* Axis labels */
 .axisLabel {
   position: absolute;
   font-size: var(--fs-label);
@@ -51,7 +51,7 @@
   transform: translateY(-50%);
 }
 
-/* ── Crosshair lines ── */
+/* Crosshair lines */
 .crosshairH {
   position: absolute;
   left: 0;
@@ -72,7 +72,7 @@
   will-change: left;
 }
 
-/* ── Cursor dot ── */
+/* Cursor dot */
 .dot {
   position: absolute;
   width: 8px;
@@ -84,7 +84,7 @@
   will-change: left, top;
 }
 
-/* ── Chain output ── */
+/* Chain output */
 .chainOutput {
   display: flex;
   flex-direction: column;
@@ -118,7 +118,7 @@
   white-space: nowrap;
 }
 
-/* ── Fade transition ── */
+/* Fade transition */
 .chainFade {
   transition: opacity 180ms ease-out;
 }
@@ -131,7 +131,7 @@
   opacity: 1;
 }
 
-/* ── Mobile ── */
+/* Mobile */
 @media (max-width: 768px) {
   .container {
     flex-direction: column;

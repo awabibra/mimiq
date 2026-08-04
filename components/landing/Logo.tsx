@@ -8,8 +8,6 @@ interface LogoProps {
 export function Logo({ className = "", variant = "nav" }: LogoProps) {
   const isHero = variant === "hero";
 
-  // Hero: large, fluid, clamp-controlled so it never overflows on small screens
-  // Nav: compact, fixed 18-20px
   const fontSize = isHero
     ? "clamp(64px, 16vw, 128px)"
     : "clamp(16px, 2vw, 20px)";
@@ -21,14 +19,12 @@ export function Logo({ className = "", variant = "nav" }: LogoProps) {
         fontSize,
         letterSpacing: "-0.03em",
         lineHeight: 1,
-        // Prevent the hero logo from exceeding screen width
         maxWidth: isHero ? "min(90vw, 640px)" : undefined,
       }}
     >
       m
       <span className="relative">
         i
-        {/* Dot above the 'i' */}
         <span
           className="absolute rounded-full bg-[#CBFF1E]"
           style={{
@@ -60,7 +56,6 @@ export function Logo({ className = "", variant = "nav" }: LogoProps) {
       </span>
       <span className="text-[#CBFF1E] relative inline-flex">
         q
-        {/* Accent underline on descender */}
         <span
           className="absolute rounded-full bg-[#CBFF1E]"
           style={{

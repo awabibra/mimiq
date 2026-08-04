@@ -32,9 +32,8 @@ export function FeatureBlock() {
   return (
     <section className="relative flex min-h-screen flex-col items-center justify-center z-10" style={{ padding: "clamp(64px,10vh,120px) clamp(20px,5vw,64px)" }}>
       <div className="mx-auto grid w-full max-w-[1120px] gap-24 lg:grid-cols-2 lg:items-center">
-        
-        {/* Left: Text Story */}
-        <motion.div 
+
+        <motion.div
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-100px" }}
@@ -55,7 +54,7 @@ export function FeatureBlock() {
 
           <div className="mt-6 flex flex-col gap-8">
             {features.map((feature, i) => (
-              <motion.div 
+              <motion.div
                 key={feature.title}
                 initial={{ opacity: 0, y: 10 }}
                 whileInView={{ opacity: 1, y: 0 }}
@@ -75,8 +74,7 @@ export function FeatureBlock() {
           </div>
         </motion.div>
 
-        {/* Right: UI Preview / Proof Panel */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-100px" }}
@@ -112,11 +110,10 @@ export function FeatureBlock() {
             ))}
           </div>
 
-          {/* Audio Trace element (from original) */}
           <div className="relative mt-6 h-[34px] overflow-hidden rounded-[4px] bg-gradient-to-b from-transparent to-red-500/10 [mask-image:linear-gradient(90deg,transparent,black_12%,black_88%,transparent)]">
             <div className="absolute inset-0 bg-[repeating-linear-gradient(90deg,rgba(255,34,34,0.44)_0,rgba(255,34,34,0.44)_1px,transparent_1px,transparent_9px)]" />
             <div className="absolute bottom-[9px] left-0 right-0 h-[1px] bg-red-500/80 shadow-[0_0_18px_rgba(255,0,0,0.72)]" />
-            <motion.div 
+            <motion.div
               animate={{ x: ["-110%", "310%"] }}
               transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
               className="absolute bottom-1 top-1 w-[36%] bg-gradient-to-r from-transparent via-red-500/40 to-transparent"

@@ -334,59 +334,6 @@ function isRemoteAudioUrl(source: string | null) {
   );
 }
 
-function getAudioUrlKind(source: string | null) {
-  if (!source) return "missing";
-  if (source.startsWith("blob:")) return "blob URL";
-  if (source.startsWith("data:")) return "data URL";
-  if (source.startsWith("filesystem:")) return "filesystem URL";
-  if (source.startsWith("http://") || source.startsWith("https://")) {
-    return "remote URL";
-  }
-
-  return "storage URL/path";
-}
-
-function getAudioCandidateKind(value: unknown) {
-  if (value === null || value === undefined) return "missing";
-  if (typeof value !== "string") return "relative";
-  const trimmed = value.trim();
-  if (!trimmed) return "empty";
-  if (trimmed.startsWith("blob:")) return "blob";
-  if (trimmed.startsWith("data:")) return "data";
-  if (trimmed.startsWith("filesystem:")) return "filesystem";
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return "http";
-  }
-  if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
-    return "relative";
-  }
-
-  return "storage-path";
-}
-
-function summarizeAudioCandidate(field: string, value: unknown) {
-  const stringValue = typeof value === "string" ? value : "";
-
-  return {
-    field,
-    present: typeof value === "string" ? stringValue.trim().length > 0 : Boolean(value),
-    urlKind: getAudioCandidateKind(value),
-    shortPrefix: stringValue.slice(0, 24),
-    isNonDurableAudioUrl: isNonDurableAudioUrl(value),
-  };
-}
-
-function describeAudioSource(source: AudioSourceDescriptor) {
-  return {
-    kind: source.kind,
-    origin: source.origin,
-    urlKind: getAudioUrlKind(source.source),
-    hasFile: Boolean(source.file),
-    filename: source.file?.name ?? null,
-    expired: source.expired,
-  };
-}
-
 function pickAudioSource(params: {
   kind: AudioTrackKind;
   localFile: File | null;
@@ -662,40 +609,6 @@ export default function MixRoomPage() {
     if (asset.kind === "full_song") setSelectedFullSongAssetId(asset.id);
   }, [setSelectedBeatAssetId, setSelectedFullSongAssetId, setSelectedVocalAssetId]);
 
-  useEffect(() => {
-    console.info("[mix-room audio candidates]", {
-      vocal: {
-        localVocalUrl: summarizeAudioCandidate("localVocalUrl", localVocalUrl),
-        projectVocalUrl: summarizeAudioCandidate(
-          "projectVocalUrl",
-          projectVocal?.url
-        ),
-	        projectVocalAsset: summarizeAudioCandidate(
-	          "projectVocalAsset",
-	          vocalAsset?.storagePath
-	        ),
-      },
-      beat: {
-        localBeatUrl: summarizeAudioCandidate("localBeatUrl", localBeatUrl),
-        projectBeatFileUrl: summarizeAudioCandidate(
-          "projectBeatFileUrl",
-          project?.beat_file_url
-        ),
-	        projectBeatAsset: summarizeAudioCandidate(
-	          "projectBeatAsset",
-	          beatAsset?.storagePath
-	        ),
-	      },
-	    });
-	  }, [
-	    beatAsset?.storagePath,
-	    localBeatUrl,
-	    localVocalUrl,
-	    project?.beat_file_url,
-	    projectVocal?.url,
-	    vocalAsset?.storagePath,
-	  ]);
-
   const vocalAudioSource = useMemo(
     () =>
       pickAudioSource({
@@ -762,13 +675,6 @@ export default function MixRoomPage() {
 	        : "waiting for project audio";
   const matchScore = report?.matchScore ?? null;
   const metricStatus = isLoading ? "Scanning" : report ? "Ready" : "Waiting";
-
-  useEffect(() => {
-	    console.info("[mix-room audio]", {
-	      vocal: describeAudioSource(vocalAudioSource),
-	      beat: describeAudioSource(beatAudioSource),
-	    });
-	  }, [beatAudioSource, vocalAudioSource]);
 
   useEffect(() => {
     const t1 = setTimeout(() => setVizVisible(true), 100);

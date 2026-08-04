@@ -8,13 +8,13 @@ import { ToolStories } from "@/components/landing/ToolStories";
 import styles from "./page.module.css";
 
 const signInHref = "/auth?mode=signin&next=%2Fprojects";
-const startHref  = "/onboarding";
+const startHref = "/auth?mode=signup&next=%2Fonboarding";
 
 export default function Home() {
   return (
     <main className={styles.root}>
 
-      {/* ── Fixed chrome ───────────────────────────── */}
+      {/* Fixed chrome */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -29,7 +29,6 @@ export default function Home() {
         </Link>
       </motion.div>
 
-      {/* ── Hero — first viewport ───────────────────── */}
       <section className={styles.hero} aria-label="mimiq studio">
         <div className={styles.copy}>
           <motion.h1
@@ -87,7 +86,7 @@ export default function Home() {
         </motion.div>
       </section>
 
-      {/* ── Tool storytelling sections ──────────────── */}
+      {/* Tool storytelling sections */}
       <ToolStories startHref={startHref} />
 
     </main>

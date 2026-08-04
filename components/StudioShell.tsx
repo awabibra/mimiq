@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { ProjectGate } from "@/components/ProjectGate";
 import { Sidebar } from "@/components/Sidebar";
-import type { Era } from "@/lib/eras";
 import type { Project } from "@/lib/types";
 import {
   getCurrentVocal,

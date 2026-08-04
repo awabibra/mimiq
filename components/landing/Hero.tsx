@@ -16,7 +16,6 @@ export function Hero({ signInHref, startHref }: HeroProps) {
   return (
     <section className={styles.hero}>
 
-      {/* Logo wordmark — centrepiece */}
       <motion.div
         initial={{ opacity: 0, y: 28, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -26,7 +25,6 @@ export function Hero({ signInHref, startHref }: HeroProps) {
         <Logo variant="hero" />
       </motion.div>
 
-      {/* Headline */}
       <motion.h1
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
@@ -38,7 +36,6 @@ export function Hero({ signInHref, startHref }: HeroProps) {
         Verify the change.
       </motion.h1>
 
-      {/* Sub-copy */}
       <motion.p
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -50,7 +47,6 @@ export function Hero({ signInHref, startHref }: HeroProps) {
         {" "}Mix chains, reference targets, and E-Val checks — all in one session.
       </motion.p>
 
-      {/* Single CTA — centered for new users */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}

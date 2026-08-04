@@ -21,7 +21,7 @@ export function useScrambleText(
   useEffect(() => {
     if (!isActive) {
       if (timerRef.current) clearInterval(timerRef.current);
-      setDisplayText(targetText);
+      queueMicrotask(() => setDisplayText(targetText));
       return;
     }
 

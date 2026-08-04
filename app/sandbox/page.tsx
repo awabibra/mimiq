@@ -11,6 +11,7 @@ import {
   type RefObject,
 } from "react";
 import type { User } from "@supabase/supabase-js";
+import { AnimatePresence, motion } from "framer-motion";
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
@@ -22,11 +23,12 @@ import type {
   AnalysisError,
   EvaluationResult,
   ProjectAudioAsset,
+  VocalRoleEvidenceSource,
+  VocalRoleId,
 } from "@/lib/types";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AnimatedGrid } from "@/components/AnimatedGrid";
-import { AuthModal } from "@/components/AuthModal";
 import { ProjectGate } from "@/components/ProjectGate";
 import { ToolLockedOverlay } from "@/components/ToolLockedOverlay";
 import { AudioAssetPicker } from "@/components/AudioAssetPicker";
@@ -35,27 +37,28 @@ import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/useAuth";
 import { useAudioStore } from "@/lib/useAudioStore";
 import { authHeaders } from "@/lib/apiAuth";
-import {
-  createProjectRecord,
-  saveProjectPatch,
-} from "@/lib/projects";
+import { saveProjectPatch } from "@/lib/projects";
 import {
   getFullSongAsset,
   getAssetPlaybackUrl,
   getPrimaryBeatAsset,
   getPrimaryVocalAsset,
   getProjectAudioAssets,
-  prepareAudioFile,
-  uploadPreparedAudioAsset,
-  upsertProjectAudioAsset,
 } from "@/lib/projectAudio";
 import {
   getCurrentVocal,
-  getLatestGeneratedChain,
   isGeneratedChain,
-  isLocalProject,
   useProject,
 } from "@/lib/useProject";
+import {
+  defaultVocalRoleId,
+  getGeneratedChainForRole,
+  getProjectVocalArchitecture,
+  getVocalRoleMeta,
+  setActiveVocalRole,
+  upsertVocalRoleChain,
+  vocalRoles,
+} from "@/lib/vocalArchitecture";
 import { supabase } from "@/lib/supabase";
 import type { GeneratedChain, ProjectPatch } from "@/lib/types";
 import { VisualVocalChain } from "./VisualVocalChain";
@@ -78,13 +81,22 @@ import {
 } from "./chainLab/metrics";
 import styles from "./page.module.css";
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Types
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 type AppState = "empty" | "analyzing" | "results";
 type SandboxMode = "view" | "edit";
 type VocalChain = ChainStep[];
+type GeneratedChainContext = Pick<
+  GeneratedChain["chain_data"],
+  | "sourceAssetId"
+  | "beatAssetId"
+  | "analysisInputKind"
+  | "vocal_role_id"
+  | "role_source"
+  | "derived_from_chain_id"
+>;
 
 type EditState = {
   mode: SandboxMode;
@@ -109,11 +121,9 @@ const initialEditState: EditState = {
   evaluating: false,
 };
 
-const SAVE_AFTER_AUTH_KEY = "mimiq-save-chain-after-auth";
-
-/* ═══════════════════════════════════════════════════════════════
-   Analysis steps labels (cosmetic — fill the wait)
-   ═══════════════════════════════════════════════════════════════ */
+/*
+   Labels shown while analysis is running
+ */
 
 const ANALYSIS_STEPS = [
   "Reading loudness levels...",
@@ -122,9 +132,9 @@ const ANALYSIS_STEPS = [
   "Mapping vocal character...",
 ];
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Inline SVG icons
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 function CheckIcon({ className }: { className?: string }) {
   return (
@@ -144,13 +154,11 @@ function CheckIcon({ className }: { className?: string }) {
 
 
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    API helper
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 async function callAnalyze(params: {
-  vocalFile?: File;
-  beatFile?: File | null;
   projectId?: string | null;
   vocalAssetId?: string | null;
   beatAssetId?: string | null;
@@ -158,6 +166,7 @@ async function callAnalyze(params: {
   mic?: string | null;
   plugins?: string[];
   eraId: string;
+  vocalRoleId?: VocalRoleId;
   xyX?: number;
   xyY?: number;
   cachedMetrics?: AudioMetrics;
@@ -167,12 +176,11 @@ async function callAnalyze(params: {
   const form = new FormData();
   form.append("daw", params.daw);
   form.append("era", params.eraId);
+  form.append("vocalRoleId", params.vocalRoleId ?? defaultVocalRoleId);
 
   if (params.projectId) form.append("projectId", params.projectId);
   if (params.vocalAssetId) form.append("vocalAssetId", params.vocalAssetId);
   if (params.beatAssetId) form.append("beatAssetId", params.beatAssetId);
-  if (params.vocalFile) form.append("vocalFile", params.vocalFile);
-  if (params.beatFile) form.append("beatFile", params.beatFile);
   if (params.xyX != null) form.append("xyX", String(params.xyX));
   if (params.xyY != null) form.append("xyY", String(params.xyY));
   if (params.cachedMetrics) {
@@ -238,9 +246,9 @@ function cloneChain(chain: ChainStep[]): ChainStep[] {
   return JSON.parse(JSON.stringify(chain)) as ChainStep[];
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Chain edit helpers
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -296,96 +304,6 @@ function scaleChainForXY(chain: ChainStep[], x: number, y: number) {
   });
 }
 
-function getExploreMetrics(eraId: string): AudioMetrics {
-  const defaults: Record<string, AudioMetrics> = {
-    nocturnal: {
-      lufs: -18,
-      dynamicRange: 8,
-      spectralCentroid: 1800,
-      reverbDecay: 0.5,
-      sibilancePeak: -14,
-      pitchVariance: 0.45,
-      breathNoise: -46,
-      dynamicInconsistency: 0.32,
-      lowEndEnergy: 0.32,
-      stereoWidth: 0.2,
-      reverbEstimate: 0.24,
-    },
-    volatile: {
-      lufs: -15,
-      dynamicRange: 6,
-      spectralCentroid: 2600,
-      reverbDecay: 0.22,
-      sibilancePeak: -11,
-      pitchVariance: 0.58,
-      breathNoise: -43,
-      dynamicInconsistency: 0.42,
-      lowEndEnergy: 0.42,
-      stereoWidth: 0.16,
-      reverbEstimate: 0.12,
-    },
-    current: {
-      lufs: -16,
-      dynamicRange: 7,
-      spectralCentroid: 2300,
-      reverbDecay: 0.38,
-      sibilancePeak: -12,
-      pitchVariance: 0.52,
-      breathNoise: -45,
-      dynamicInconsistency: 0.34,
-      lowEndEnergy: 0.34,
-      stereoWidth: 0.24,
-      reverbEstimate: 0.18,
-    },
-    golden: {
-      lufs: -17,
-      dynamicRange: 9,
-      spectralCentroid: 1900,
-      reverbDecay: 0.24,
-      sibilancePeak: -15,
-      pitchVariance: 0.42,
-      breathNoise: -48,
-      dynamicInconsistency: 0.28,
-      lowEndEnergy: 0.3,
-      stereoWidth: 0.1,
-      reverbEstimate: 0.1,
-    },
-    crystalline: {
-      lufs: -16,
-      dynamicRange: 6.5,
-      spectralCentroid: 3000,
-      reverbDecay: 0.28,
-      sibilancePeak: -10,
-      pitchVariance: 0.5,
-      breathNoise: -44,
-      dynamicInconsistency: 0.36,
-      lowEndEnergy: 0.24,
-      stereoWidth: 0.14,
-      reverbEstimate: 0.09,
-    },
-    foryou: {
-      lufs: -15,
-      dynamicRange: 6,
-      spectralCentroid: 2200,
-      reverbDecay: 0.32,
-      sibilancePeak: -12,
-      pitchVariance: 0.46,
-      breathNoise: -46,
-      dynamicInconsistency: 0.3,
-      lowEndEnergy: 0.28,
-      stereoWidth: 0.18,
-      reverbEstimate: 0.14,
-    },
-  };
-
-  const aliases: Record<string, string> = {
-    rnb: "nocturnal",
-    trap: "volatile",
-    foryou: "foryou",
-  };
-
-  return defaults[eraId] ?? defaults[aliases[eraId]] ?? defaults.golden;
-}
 
 const newClientId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -395,9 +313,9 @@ const newClientId = () => {
   return `${Date.now()}`;
 };
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Transition Overlay Component
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 function SandboxTransitionOverlay() {
   return (
@@ -422,9 +340,9 @@ function SandboxTransitionOverlay() {
 
 
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Page component
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 export default function SandboxPage() {
   /* Zustand Store */
@@ -434,12 +352,18 @@ export default function SandboxPage() {
   const project = useProject((state) => state.project);
   const setActiveProject = useProject((state) => state.setActiveProject);
   const updateProject = useProject((state) => state.updateProject);
+  const vocalArchitecture = useMemo(
+    () => getProjectVocalArchitecture(project),
+    [project]
+  );
 
   /* Core state */
   const [appState, setAppState] = useState<AppState>("empty");
   const [activeEra, setActiveEra] = useState<Era>(
     () => eras.find((e) => e.id === storeEra) || defaultEra
   );
+  const [activeVocalRoleId, setActiveVocalRoleId] =
+    useState<VocalRoleId>(defaultVocalRoleId);
 
   /* Sync activeEra when Zustand hydrates from localStorage */
   useEffect(() => {
@@ -452,8 +376,6 @@ export default function SandboxPage() {
     }
   }, [storeEra, activeEra.id]);
 
-  const [vocalFile, setVocalFile] = useState<File | null>(null);
-  const [beatFile, setBeatFile] = useState<File | null>(null);
   const [selectedChainAssetId, setSelectedChainAssetId] = useState<string | null>(null);
   const [selectedBeatAssetId, setSelectedBeatAssetId] = useState<string | null>(null);
   const [selectedPlaybackUrl, setSelectedPlaybackUrl] = useState<string | null>(null);
@@ -464,7 +386,7 @@ export default function SandboxPage() {
   useEffect(() => {
     const fromOnboarding = sessionStorage.getItem("mimiq-from-onboarding");
     if (fromOnboarding) {
-      sessionStorage.removeItem("mimiq-from-onboarding"); // consume — fires once only
+      sessionStorage.removeItem("mimiq-from-onboarding"); // Only show it once.
       const frame = requestAnimationFrame(() => setShowCinematic(true));
       return () => cancelAnimationFrame(frame);
     }
@@ -497,7 +419,6 @@ export default function SandboxPage() {
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [showSignUpPrompt, setShowSignUpPrompt] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
 
   /* XY cursor position (normalised 0-1) */
@@ -514,7 +435,7 @@ export default function SandboxPage() {
   const chainRef = useRef<ChainStep[]>([]);
   const cursorRef = useRef({ x: 0.55, y: 0.62 });
 
-  /* ── Era switching updates CSS variable ── */
+  /* Era switching updates CSS variable */
   useIsomorphicLayoutEffect(() => {
     document.documentElement.style.setProperty("--accent", "#C8F135");
   }, [activeEra.id]);
@@ -539,7 +460,7 @@ export default function SandboxPage() {
     []
   );
 
-  /* ── Auto-dismiss error banner after 8s ── */
+  /* Auto-dismiss error banner after 8s */
   const showBanner = useCallback((msg: string) => {
     setErrorBanner(msg);
     if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
@@ -570,15 +491,12 @@ export default function SandboxPage() {
       try {
         await saveUserPrefs(authedUser);
 
-	        const remoteProject = isLocalProject(project)
-	          ? await createProjectRecord(project.name, authedUser.id)
-	          : project;
 	        const now = new Date().toISOString();
 	        const activeSavedChain =
 	          project.generated_chains
 	            .filter(isGeneratedChain)
 	            .find((entry) => entry.id === activeGeneratedChainId) ??
-	          getLatestGeneratedChain(project);
+	          getGeneratedChainForRole(project, activeVocalRoleId);
 	        const selectedSourceAsset =
 	          getProjectAudioAssets(project).find((asset) => asset.id === selectedChainAssetId) ??
 	          null;
@@ -620,6 +538,13 @@ export default function SandboxPage() {
 	                measurements: cachedMetrics ?? entry.chain_data.measurements,
 	                xyPosition: { x: cursorX, y: cursorY },
 	                analysis_version: provenance.analysis_version,
+	                vocal_role_id: activeVocalRoleId,
+	                role_source:
+	                  activeVocalRoleId === "lead"
+	                    ? "measured_role"
+	                    : activeSavedChain?.chain_data.role_source ?? "lead_derived",
+	                derived_from_chain_id:
+	                  activeSavedChain?.chain_data.derived_from_chain_id ?? null,
 	                sourceAssetId:
 	                  entry.chain_data.sourceAssetId ?? selectedChainAssetId ?? null,
 	                beatAssetId:
@@ -661,6 +586,13 @@ export default function SandboxPage() {
 	                measurements: cachedMetrics ?? activeSavedChain?.chain_data.measurements,
 	                xyPosition: { x: cursorX, y: cursorY },
 	                analysis_version: provenance.analysis_version,
+	                vocal_role_id: activeVocalRoleId,
+	                role_source:
+	                  activeVocalRoleId === "lead"
+	                    ? "measured_role"
+	                    : activeSavedChain?.chain_data.role_source ?? "lead_derived",
+	                derived_from_chain_id:
+	                  activeSavedChain?.chain_data.derived_from_chain_id ?? null,
 	                sourceAssetId:
 	                  activeSavedChain?.chain_data.sourceAssetId ?? selectedChainAssetId ?? null,
 	                beatAssetId:
@@ -693,45 +625,33 @@ export default function SandboxPage() {
 	          }
 	        }
 
-		        let audio_assets = getProjectAudioAssets(project);
-		        let patch: ProjectPatch = {
+		        const audio_assets = getProjectAudioAssets(project);
+		        const sourceAssetId =
+		          activeSavedChain?.chain_data.sourceAssetId ?? selectedChainAssetId ?? null;
+            const roleEvidence: VocalRoleEvidenceSource =
+              activeVocalRoleId === "lead"
+                ? "measured_role"
+                : activeSavedChain?.chain_data.role_source ?? "lead_derived";
+		        const patch: ProjectPatch = {
 		          audio_assets,
 		          generated_chains: generatedChains,
+              vocal_architecture: savedActiveChainId
+                ? upsertVocalRoleChain(project, activeVocalRoleId, savedActiveChainId, roleEvidence, {
+                    sourceAssetId,
+                    derivedFromChainId: activeSavedChain?.chain_data.derived_from_chain_id ?? null,
+                    now,
+                  })
+                : setActiveVocalRole(project, activeVocalRoleId),
 		          mix_room_report: project.mix_room_report,
 		          level_lab_report: project.level_lab_report,
 		          last_opened_at: now,
 		        };
 
-	        if (beatFile) {
-            const prepared = await prepareAudioFile({ kind: "beat", file: beatFile });
-            const readyAsset = await uploadPreparedAudioAsset({
-              userId: authedUser.id,
-              projectId: remoteProject.id,
-              asset: prepared.asset,
-              file: prepared.file,
-            });
-            audio_assets = upsertProjectAudioAsset(audio_assets, readyAsset);
-	          patch = { ...patch, audio_assets };
-	        }
-	
-	        if (vocalFile) {
-            const prepared = await prepareAudioFile({ kind: "vocal", file: vocalFile });
-            const readyAsset = await uploadPreparedAudioAsset({
-              userId: authedUser.id,
-              projectId: remoteProject.id,
-              asset: prepared.asset,
-              file: prepared.file,
-            });
-            audio_assets = upsertProjectAudioAsset(audio_assets, readyAsset);
-	          patch = { ...patch, audio_assets };
-	        }
-
-	        const saved = await saveProjectPatch(remoteProject.id, patch);
+	        const saved = await saveProjectPatch(project.id, patch);
 	        setActiveProject(saved);
 	        if (savedActiveChainId) {
 	          setActiveGeneratedChainId(savedActiveChainId);
 	        }
-	        setShowSignUpPrompt(false);
 	        showBanner("Chain saved.");
       } catch {
         showBanner("mimiq could not save this chain yet. Try again.");
@@ -741,9 +661,9 @@ export default function SandboxPage() {
       }
     },
     [
-	      beatFile,
 	      activeEra.id,
 	      activeGeneratedChainId,
+        activeVocalRoleId,
 	      cachedAnalysisProvenance,
 	      cachedMetrics,
 	      chain,
@@ -763,17 +683,13 @@ export default function SandboxPage() {
 	      selectedChainAssetId,
       setActiveProject,
       showBanner,
-      vocalFile,
     ]
   );
 
   const handleSaveChain = useCallback(async () => {
     if (!project || chain.length === 0 || saveBusy) return;
 
-    if (!user) {
-      setShowSignUpPrompt(true);
-      return;
-    }
+    if (!user) return;
 
     try {
       await saveCurrentProject(user);
@@ -782,47 +698,30 @@ export default function SandboxPage() {
     }
   }, [chain.length, project, saveBusy, saveCurrentProject, user]);
 
-  const handleAuthedForSave = useCallback(
-    async (authedUser: User) => {
-      await saveCurrentProject(authedUser);
-    },
-    [saveCurrentProject]
-  );
-
-  useEffect(() => {
-    if (!user || !project) return;
-
-    const shouldSave = sessionStorage.getItem(SAVE_AFTER_AUTH_KEY) === "1";
-    if (!shouldSave) return;
-
-    sessionStorage.removeItem(SAVE_AFTER_AUTH_KEY);
-    const frame = requestAnimationFrame(() => {
-      void saveCurrentProject(user).catch(() => undefined);
-    });
-
-    return () => cancelAnimationFrame(frame);
-  }, [project, saveCurrentProject, user]);
-
   useEffect(() => {
     if (!project) return;
 
     const currentVocal = getCurrentVocal(project);
-    const latestChain = getLatestGeneratedChain(project);
-    const chainData = latestChain?.chain_data;
+    const projectArchitecture = getProjectVocalArchitecture(project);
+    const activeRoleCandidate = projectArchitecture.active_role_id;
+    const activeRoleChain = getGeneratedChainForRole(project, activeRoleCandidate);
+    const leadChain = getGeneratedChainForRole(project, "lead");
+    const selectedRoleId = activeRoleChain ? activeRoleCandidate : "lead";
+    const selectedSavedChain = activeRoleChain ?? leadChain;
+    const chainData = selectedSavedChain?.chain_data;
     const xyPosition = chainData?.xyPosition ?? { x: 0.55, y: 0.62 };
     const frame = requestAnimationFrame(() => {
-      setVocalFile(null);
-      setBeatFile(null);
       setUploadError(null);
+      setActiveVocalRoleId(selectedRoleId);
 
-      if (latestChain && chainData?.chain?.length && chainData.measurements) {
+      if (selectedSavedChain && chainData?.chain?.length && chainData.measurements) {
         const provenance = provenanceFromChainData(chainData);
         setChain(chainData.chain);
         setEngineerNote(chainData.engineer_note ?? null);
         setInsights(formatInsights(chainData.measurements));
         setCachedMetrics(chainData.measurements);
         setCachedAnalysisProvenance(provenance);
-        setActiveGeneratedChainId(latestChain.id);
+        setActiveGeneratedChainId(selectedSavedChain.id);
         setChainFitGood(chainData.measured_fit === "good");
         setEditState(initialEditState);
         setHasUnsavedEdit(false);
@@ -900,10 +799,12 @@ export default function SandboxPage() {
     if (!selectedChain) return;
 
     const chainData = selectedChain.chain_data;
+    const roleId = chainData.vocal_role_id ?? "lead";
     const xyPosition = chainData.xyPosition ?? { x: 0.55, y: 0.62 };
     const provenance = provenanceFromChainData(chainData);
 
     const frame = requestAnimationFrame(() => {
+      setActiveVocalRoleId(roleId);
       setChain(chainData.chain);
       setEngineerNote(chainData.engineer_note ?? null);
       if (chainData.measurements) {
@@ -948,10 +849,7 @@ export default function SandboxPage() {
       eraId: string,
       xyX: number,
       xyY: number,
-      context?: Pick<
-        GeneratedChain["chain_data"],
-        "sourceAssetId" | "beatAssetId" | "analysisInputKind"
-      >
+      context?: Partial<GeneratedChainContext>
     ): GeneratedChain => ({
       id: newClientId(),
       chain_data: {
@@ -961,6 +859,11 @@ export default function SandboxPage() {
         measurements: result.metrics,
         xyPosition: result.xyPosition ?? { x: xyX, y: xyY },
         analysis_version: result.analysis_version,
+        vocal_role_id: context?.vocal_role_id ?? activeVocalRoleId,
+        role_source:
+          context?.role_source ??
+          (activeVocalRoleId === "lead" ? "measured_role" : "lead_derived"),
+        derived_from_chain_id: context?.derived_from_chain_id ?? null,
         ...(context?.sourceAssetId ? { sourceAssetId: context.sourceAssetId } : {}),
         ...(context?.beatAssetId ? { beatAssetId: context.beatAssetId } : {}),
         ...(context?.analysisInputKind
@@ -979,7 +882,7 @@ export default function SandboxPage() {
         xyPosition: { x: xyX, y: xyY },
       },
     }),
-    [daw, mic, plugins]
+    [activeVocalRoleId, daw, mic, plugins]
   );
 
   const persistProjectPatch = useCallback(
@@ -988,10 +891,6 @@ export default function SandboxPage() {
 
       updateProject(patch);
 
-      if (!user || isLocalProject(project)) {
-        return;
-      }
-
       try {
         const saved = await saveProjectPatch(project.id, patch);
         setActiveProject(saved);
@@ -999,32 +898,38 @@ export default function SandboxPage() {
         showBanner("Project updated locally, but Supabase did not save it yet.");
       }
     },
-    [project, setActiveProject, showBanner, updateProject, user]
+    [project, setActiveProject, showBanner, updateProject]
   );
 
 	  const persistGeneratedResult = useCallback(
 	    async (
 	      result: AnalysisResponse,
-	      eraId: string,
+      eraId: string,
       xyX: number,
       xyY: number,
-      context?: Pick<
-        GeneratedChain["chain_data"],
-        "sourceAssetId" | "beatAssetId" | "analysisInputKind"
-      >
+      context?: Partial<GeneratedChainContext>
     ) => {
       if (!project) return;
 
       const generated = buildGeneratedChain(result, eraId, xyX, xyY, context);
+      const roleId = generated.chain_data.vocal_role_id ?? activeVocalRoleId;
+      const roleEvidence =
+        generated.chain_data.role_source ??
+        (roleId === "lead" ? "measured_role" : "lead_derived");
       setActiveGeneratedChainId(generated.id);
+      setActiveVocalRoleId(roleId);
       setChainFitGood(false);
       setCachedAnalysisProvenance(provenanceFromResult(result));
       setEvaluationIteration(0);
       await persistProjectPatch({
         generated_chains: [generated, ...project.generated_chains],
+        vocal_architecture: upsertVocalRoleChain(project, roleId, generated.id, roleEvidence, {
+          sourceAssetId: generated.chain_data.sourceAssetId ?? null,
+          derivedFromChainId: generated.chain_data.derived_from_chain_id ?? null,
+        }),
       });
     },
-	    [buildGeneratedChain, persistProjectPatch, project]
+	    [activeVocalRoleId, buildGeneratedChain, persistProjectPatch, project]
 	  );
 
 	  const regenerateChain = useCallback(
@@ -1043,6 +948,7 @@ export default function SandboxPage() {
 	          mic,
 	          plugins,
 	          eraId,
+            vocalRoleId: activeVocalRoleId,
 	          xyX,
 	          xyY,
 	          cachedMetrics,
@@ -1074,11 +980,17 @@ export default function SandboxPage() {
 	          project?.generated_chains
 	            .filter(isGeneratedChain)
 	            .find((entry) => entry.id === activeGeneratedChainId)
-	            ?.chain_data;
+	            ?.chain_data ?? getGeneratedChainForRole(project, activeVocalRoleId)?.chain_data;
 	        void persistGeneratedResult(result, eraId, nextX, nextY, {
 	          sourceAssetId: savedChainContext?.sourceAssetId,
 	          beatAssetId: savedChainContext?.beatAssetId,
 	          analysisInputKind: savedChainContext?.analysisInputKind,
+            vocal_role_id: activeVocalRoleId,
+            role_source:
+              activeVocalRoleId === "lead"
+                ? "measured_role"
+                : savedChainContext?.role_source ?? "lead_derived",
+            derived_from_chain_id: savedChainContext?.derived_from_chain_id ?? null,
 	        });
 	      } catch {
 	        showBanner("Failed to regenerate chain. Try again.");
@@ -1090,6 +1002,7 @@ export default function SandboxPage() {
 	      cachedAnalysisProvenance,
 	      cachedMetrics,
 	      activeGeneratedChainId,
+        activeVocalRoleId,
 	      daw,
 	      mic,
 	      persistGeneratedResult,
@@ -1103,13 +1016,182 @@ export default function SandboxPage() {
 	  const currentSavedFitGood = useCallback(() => {
     const saved = project?.generated_chains
       .filter(isGeneratedChain)
-      .find((entry) => entry.id === activeGeneratedChainId);
+      .find((entry) => entry.id === activeGeneratedChainId) ??
+      getGeneratedChainForRole(project, activeVocalRoleId);
 
     return (
       saved?.chain_data.measured_fit === "good" &&
       hasMeasuredProvenance(provenanceFromChainData(saved.chain_data))
     );
-  }, [activeGeneratedChainId, project]);
+  }, [activeGeneratedChainId, activeVocalRoleId, project]);
+
+  const applySavedChainToWorkspace = useCallback(
+    (savedChain: GeneratedChain) => {
+      const chainData = savedChain.chain_data;
+      const xyPosition = chainData.xyPosition ?? { x: 0.55, y: 0.62 };
+      const provenance = provenanceFromChainData(chainData);
+
+      setChain(chainData.chain);
+      setEngineerNote(chainData.engineer_note ?? null);
+      if (chainData.measurements) {
+        setInsights(formatInsights(chainData.measurements));
+        setCachedMetrics(chainData.measurements);
+      } else {
+        setInsights(null);
+        setCachedMetrics(null);
+      }
+      setCachedAnalysisProvenance(provenance);
+      setActiveGeneratedChainId(savedChain.id);
+      setChainFitGood(chainData.measured_fit === "good");
+      setEditState(initialEditState);
+      setHasUnsavedEdit(false);
+      setEvaluationIteration(chainData.iteration_count ?? 0);
+      setCursorX(xyPosition.x);
+      setCursorY(xyPosition.y);
+      cursorRef.current = xyPosition;
+      setHasPendingGenerate(false);
+      setAppState("results");
+      setSession({
+        isAnalyzed: true,
+        analysisResult: chainData.measurements
+          ? {
+              chain: chainData.chain,
+              summary: chainData.summary,
+              metrics: chainData.measurements,
+              xyPosition,
+              engineer_note: chainData.engineer_note,
+              analysis_version: provenance.analysis_version,
+              fallback_used: provenance.fallback_used,
+              audio_service_status: provenance.audio_service_status,
+            }
+          : null,
+      });
+    },
+    [setSession]
+  );
+
+  const handleSelectVocalRole = useCallback(
+    async (roleId: VocalRoleId) => {
+      if (!project || editState.mode === "edit") return;
+
+      setActiveVocalRoleId(roleId);
+      const savedChain = getGeneratedChainForRole(project, roleId);
+      if (savedChain) {
+        applySavedChainToWorkspace(savedChain);
+      } else {
+        setChain([]);
+        setEngineerNote(null);
+        setInsights(null);
+        setCachedMetrics(null);
+        setCachedAnalysisProvenance(null);
+        setActiveGeneratedChainId(null);
+        setChainFitGood(false);
+        setEditState(initialEditState);
+        setHasUnsavedEdit(false);
+        setEvaluationIteration(0);
+        setHasPendingGenerate(false);
+        setAppState("results");
+      }
+
+      await persistProjectPatch({
+        vocal_architecture: setActiveVocalRole(project, roleId),
+      });
+    },
+    [applySavedChainToWorkspace, editState.mode, persistProjectPatch, project]
+  );
+
+  const handleCreateVocalRole = useCallback(
+    async (roleId: VocalRoleId) => {
+      if (!project || chainLoading || editState.mode === "edit") return;
+
+      if (roleId === "lead") return;
+
+      const leadChain = getGeneratedChainForRole(project, "lead");
+      const leadData = leadChain?.chain_data;
+      if (
+        !leadChain ||
+        !leadData?.measurements ||
+        !hasMeasuredProvenance(provenanceFromChainData(leadData))
+      ) {
+        showBanner("Measure the Lead before creating supporting vocal roles.");
+        return;
+      }
+
+      const xyPosition = leadData.xyPosition ?? { x: cursorRef.current.x, y: cursorRef.current.y };
+      setActiveVocalRoleId(roleId);
+      setChainLoading(true);
+
+      try {
+        const result = await callAnalyze({
+          daw: daw || "Logic Pro",
+          mic,
+          plugins,
+          eraId: activeEra.id,
+          vocalRoleId: roleId,
+          xyX: xyPosition.x,
+          xyY: xyPosition.y,
+          cachedMetrics: leadData.measurements,
+          cachedProvenance: provenanceFromChainData(leadData),
+        });
+        const nextX = result.xyPosition?.x ?? xyPosition.x;
+        const nextY = result.xyPosition?.y ?? xyPosition.y;
+        const generated = buildGeneratedChain(result, activeEra.id, nextX, nextY, {
+          sourceAssetId: leadData.sourceAssetId ?? null,
+          beatAssetId: leadData.beatAssetId ?? null,
+          analysisInputKind: leadData.analysisInputKind,
+          vocal_role_id: roleId,
+          role_source: "lead_derived",
+          derived_from_chain_id: leadChain.id,
+        });
+
+        setChain(result.chain);
+        setEngineerNote(result.engineer_note ?? null);
+        setInsights(formatInsights(result.metrics));
+        setCachedMetrics(result.metrics);
+        setCachedAnalysisProvenance(provenanceFromResult(result));
+        setActiveGeneratedChainId(generated.id);
+        setChainFitGood(false);
+        setEditState(initialEditState);
+        setHasUnsavedEdit(false);
+        setEvaluationIteration(0);
+        setCursorX(nextX);
+        setCursorY(nextY);
+        cursorRef.current = { x: nextX, y: nextY };
+        setHasPendingGenerate(false);
+        setAppState("results");
+        setSession({
+          isAnalyzed: true,
+          analysisResult: result,
+          currentXyPosition: result.xyPosition,
+        });
+
+        await persistProjectPatch({
+          generated_chains: [generated, ...project.generated_chains],
+          vocal_architecture: upsertVocalRoleChain(project, roleId, generated.id, "lead_derived", {
+            sourceAssetId: leadData.sourceAssetId ?? null,
+            derivedFromChainId: leadChain.id,
+          }),
+        });
+      } catch {
+        showBanner("mimiq could not create that role yet. Try again.");
+      } finally {
+        setChainLoading(false);
+      }
+    },
+    [
+      activeEra.id,
+      buildGeneratedChain,
+      chainLoading,
+      daw,
+      editState.mode,
+      mic,
+      persistProjectPatch,
+      plugins,
+      project,
+      setSession,
+      showBanner,
+    ]
+  );
 
   const handleEnterEditMode = useCallback(() => {
     if (chain.length === 0) return;
@@ -1181,6 +1263,10 @@ export default function SandboxPage() {
           chain_data: {
             ...entry.chain_data,
             chain: editedChain,
+            vocal_role_id: entry.chain_data.vocal_role_id ?? activeVocalRoleId,
+            role_source:
+              entry.chain_data.role_source ??
+              (activeVocalRoleId === "lead" ? "measured_role" : "lead_derived"),
             measured_fit: measuredFit,
             validation_timestamp: validationTimestamp,
             iteration_count: iterationCount,
@@ -1190,7 +1276,16 @@ export default function SandboxPage() {
       });
 
       if (replaced) {
-        await persistProjectPatch({ generated_chains });
+        await persistProjectPatch({
+          generated_chains,
+          vocal_architecture: upsertVocalRoleChain(
+            project,
+            activeVocalRoleId,
+            activeGeneratedChainId,
+            activeVocalRoleId === "lead" ? "measured_role" : "lead_derived",
+            { now: validationTimestamp }
+          ),
+        });
       }
     }
 
@@ -1198,6 +1293,7 @@ export default function SandboxPage() {
     showBanner(fitGood ? "Measured fit saved." : "Chain changes saved.");
   }, [
 	    activeGeneratedChainId,
+      activeVocalRoleId,
 	    cachedAnalysisProvenance,
 	    closeEditMode,
     editState.editedChain,
@@ -1306,7 +1402,7 @@ export default function SandboxPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [editState.mode, handleDiscardEdit]);
 
-  /* ── Handle era change ── */
+  /* Handle era change */
 	  const handleEraChange = useCallback(
 	    async (era: Era) => {
 	      setActiveEra(era);
@@ -1356,11 +1452,13 @@ export default function SandboxPage() {
           mic,
           plugins,
           eraId: activeEra.id,
+          vocalRoleId: "lead",
         }),
         minDelay,
       ]);
 
       setChain(result.chain);
+      setActiveVocalRoleId("lead");
       setEngineerNote(result.engineer_note ?? null);
       setInsights(formatInsights(result.metrics));
       setCachedMetrics(result.metrics);
@@ -1370,6 +1468,10 @@ export default function SandboxPage() {
       setHasPendingGenerate(false);
 
       try {
+        const leadRoleEvidence: VocalRoleEvidenceSource =
+          result.audio_service_status === "ok" && !result.fallback_used
+            ? "measured_role"
+            : "saved_project_data";
 	        const generated = buildGeneratedChain(
 	          result,
 	          activeEra.id,
@@ -1380,6 +1482,9 @@ export default function SandboxPage() {
 	            beatAssetId: beatAsset?.id ?? null,
 	            analysisInputKind:
 	              asset.kind === "full_song" ? "full_song" : "vocal",
+              vocal_role_id: "lead",
+              role_source: leadRoleEvidence,
+              derived_from_chain_id: null,
 	          }
 	        );
         setActiveGeneratedChainId(generated.id);
@@ -1387,6 +1492,9 @@ export default function SandboxPage() {
         setEvaluationIteration(0);
         await persistProjectPatch({
           generated_chains: [generated, ...project.generated_chains],
+          vocal_architecture: upsertVocalRoleChain(project, "lead", generated.id, leadRoleEvidence, {
+            sourceAssetId: asset.id,
+          }),
         });
       } catch {
         showBanner("Analysis finished, but the generated chain did not save yet.");
@@ -1419,88 +1527,11 @@ export default function SandboxPage() {
     showBanner,
   ]);
 
-  /* ── Skip upload — explore without audio ── */
-  const handleSkip = useCallback(async () => {
-    setAppState("analyzing");
-    // Minimum display time so the analyzing state reads properly
-    const MIN_ANALYZE_MS = 2600;
-    const minDelay = new Promise<void>((resolve) =>
-      setTimeout(resolve, MIN_ANALYZE_MS)
-    );
-    try {
-      const exploreMetrics = getExploreMetrics(activeEra.id);
 
-      const [result] = await Promise.all([
-        callAnalyze({
-          daw: daw || "Logic Pro",
-          mic,
-          plugins,
-          eraId: activeEra.id,
-          xyX: 0.55,
-          xyY: 0.62,
-          cachedMetrics: exploreMetrics,
-          cachedProvenance: SAFE_ANALYSIS_PROVENANCE,
-        }),
-        minDelay,
-      ]);
-
-      setChain(result.chain);
-      setEngineerNote(result.engineer_note ?? null);
-      setInsights(formatInsights(result.metrics));
-      setCachedMetrics(result.metrics);
-      setCachedAnalysisProvenance(provenanceFromResult(result));
-      setCursorX(result.xyPosition.x);
-      setCursorY(result.xyPosition.y);
-      setHasPendingGenerate(false);
-      void persistGeneratedResult(
-	        result,
-	        activeEra.id,
-	        result.xyPosition.x,
-	        result.xyPosition.y,
-	        {
-	          sourceAssetId: null,
-	          beatAssetId: null,
-	          analysisInputKind: "fallback",
-	        }
-	      );
-
-	      setSession({
-	        isAnalyzed: true,
-	        analysisResult: result,
-	      });
-
-      setAppState("results");
-    } catch {
-      // Wait out the minimum time even on error
-      await minDelay;
-      setAppState("results");
-    }
-  }, [activeEra.id, daw, mic, plugins, persistGeneratedResult, setSession]);
-
-  /* ── Remove file ── */
-  const handleRemoveVocal = useCallback(() => {
-    setVocalFile(null);
-    setBeatFile(null);
-    setChain([]);
-    setEngineerNote(null);
-    setInsights(null);
-    setCachedMetrics(null);
-    setCachedAnalysisProvenance(null);
-    setActiveGeneratedChainId(null);
-    setEditState(initialEditState);
-    setHasUnsavedEdit(false);
-    setEvaluationIteration(0);
-    setChainFitGood(false);
-    setErrorBanner(null);
-    setUploadError(null);
-    setHasPendingGenerate(false);
-    setAppState("empty");
-  }, []);
-
-  /* ── XY pad drag ── */
+  /* XY pad drag */
   const isDragging = useRef(false);
 
-	  /* ── Generate Chain ── */
+	  /* Generate Chain */
 	  const handleGenerate = useCallback(async () => {
 	    await regenerateChain(activeEra.id, cursorRef.current.x, cursorRef.current.y);
 	  }, [activeEra.id, regenerateChain]);
@@ -1510,7 +1541,7 @@ export default function SandboxPage() {
       project?.generated_chains
         .filter(isGeneratedChain)
         .find((entry) => entry.id === activeGeneratedChainId) ??
-      getLatestGeneratedChain(project);
+      getGeneratedChainForRole(project, activeVocalRoleId);
 
     if (!savedChain) {
       handleDiscardEdit();
@@ -1537,7 +1568,7 @@ export default function SandboxPage() {
     setCursorY(xyPosition.y);
     setHasPendingGenerate(false);
     showBanner("Chain reset to the saved project state.");
-  }, [activeGeneratedChainId, handleDiscardEdit, project, showBanner]);
+  }, [activeGeneratedChainId, activeVocalRoleId, handleDiscardEdit, project, showBanner]);
 
   const handleAssistantFix = useCallback((fix: AssistantFix) => {
     if (!fix.targetStep) return;
@@ -1667,9 +1698,9 @@ export default function SandboxPage() {
     updateCursorFromPointer,
   ]);
 
-  /* ═══════════════════════════════════════════════════════════
+  /*
      Render
-     ═══════════════════════════════════════════════════════════ */
+ */
 
   const isEditing = editState.mode === "edit";
   const displayedChain =
@@ -1702,6 +1733,28 @@ export default function SandboxPage() {
     const playbackAssetCreatedAt = selectedChainAsset?.createdAt ?? new Date(0).toISOString();
     const playbackAssetStatus = selectedChainAsset?.status ?? "ready";
     const playbackAssetError = selectedChainAsset?.error ?? null;
+    const activeVocalRole = vocalArchitecture.roles[activeVocalRoleId];
+    const activeRoleMeta = getVocalRoleMeta(activeVocalRoleId);
+    const activeRoleCreated = activeVocalRole?.status === "created";
+    const leadHasMeasuredContext = Boolean(
+      getGeneratedChainForRole(project, "lead")?.chain_data.measurements &&
+        hasMeasuredProvenance(
+          provenanceFromChainData(getGeneratedChainForRole(project, "lead")!.chain_data)
+        )
+    );
+    const showRoleCreateState =
+      activeVocalRoleId !== "lead" &&
+      !activeRoleCreated &&
+      appState !== "analyzing" &&
+      !chainLoading;
+    const roleSourceLabel =
+      activeVocalRole?.evidence_source === "measured_role"
+        ? "Measured role"
+        : activeVocalRole?.evidence_source === "lead_derived"
+          ? "Lead-derived"
+          : activeVocalRole?.evidence_source === "saved_project_data"
+            ? "Saved data"
+            : "Unknown source";
     useEffect(() => {
       let alive = true;
 
@@ -1775,14 +1828,14 @@ export default function SandboxPage() {
   return (
     <ProjectGate>
     <div className={styles.layout}>
-      {/* ─────────────────────────────────────────────────
-          ENTRANCE OVERLAY — only from onboarding
-          ───────────────────────────────────────────────── */}
+      {/*
+          Entry overlay, only from onboarding
+ */}
       {showCinematic && <SandboxTransitionOverlay />}
 
-      {/* ─────────────────────────────────────────────────
+      {/*
           ERROR BANNER
-          ───────────────────────────────────────────────── */}
+ */}
       {errorBanner && (
         <div className={styles.errorBanner}>
           <span className={styles.errorBannerText}>{errorBanner}</span>
@@ -1796,12 +1849,12 @@ export default function SandboxPage() {
         </div>
       )}
 
-      {/* ─────────────────────────────────────────────────
+      {/*
           SIDEBAR & MAIN CONTENT
-          ───────────────────────────────────────────────── */}
+ */}
       <Sidebar
         activePage="sandbox"
-        savedCount={0}
+        savedCount={project?.generated_chains?.filter(isGeneratedChain).length ?? 0}
         dimNavItems={isEditing}
       />
 
@@ -1849,6 +1902,7 @@ export default function SandboxPage() {
       >
 	        <WorkspaceMetricsBar
 	          readouts={metricReadouts}
+	          provenance={cachedAnalysisProvenance}
 	          busyLabel={
 	            appState === "analyzing"
 	              ? "Analyzing"
@@ -1860,13 +1914,63 @@ export default function SandboxPage() {
 	          onAnalyze={handleGenerate}
 	        />
 
+          <section className={styles.roleSelector} aria-label="Vocal architecture roles">
+            {vocalRoles.map((role) => {
+              const projectRole = vocalArchitecture.roles[role.id];
+              const roleChain = getGeneratedChainForRole(project, role.id);
+              const isActive = role.id === activeVocalRoleId;
+              const isCreated = projectRole.status === "created" || Boolean(roleChain);
+              const evidence =
+                projectRole.evidence_source === "measured_role"
+                  ? "measured"
+                  : projectRole.evidence_source === "lead_derived"
+                    ? "lead-derived"
+                    : projectRole.evidence_source === "saved_project_data"
+                      ? "saved"
+                      : "not created";
+
+              return (
+                <div
+                  key={role.id}
+                  className={`${styles.roleCard} ${isActive ? styles.roleCardActive : ""}`}
+                >
+                  <button
+                    type="button"
+                    className={styles.roleCardMain}
+                    onClick={() => void handleSelectVocalRole(role.id)}
+                    disabled={editState.mode === "edit"}
+                    aria-pressed={isActive}
+                  >
+                    <span className={styles.roleCardLabel}>{role.shortLabel}</span>
+                    <span className={styles.roleCardState}>{evidence}</span>
+                  </button>
+                  {!isCreated && role.id !== "lead" && (
+                    <button
+                      type="button"
+                      className={styles.roleCreateButton}
+                      onClick={() => void handleCreateVocalRole(role.id)}
+                      disabled={
+                        !leadHasMeasuredContext ||
+                        chainLoading ||
+                        editState.mode === "edit"
+                      }
+                    >
+                      Create
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+
         <main className={`${styles.chainWorkspace} ${isEditing ? styles.editDimmed : ""}`}>
           <header className={styles.workspaceHeader}>
             <div>
               <span className={styles.chainTitle}>Vocal Chain</span>
-              <h1>Chain</h1>
+              <h1>{activeRoleMeta.label}</h1>
             </div>
             <div className={styles.workspaceActions}>
+              <span className={styles.roleSourceBadge}>{roleSourceLabel}</span>
               {isEditing && <span className={styles.editingBadge}>Editing</span>}
               <span className={styles.optimizeLabel}>Optimize for</span>
               <span className={styles.optimizePill}>{activeEra.name}</span>
@@ -1886,113 +1990,128 @@ export default function SandboxPage() {
           <section
             className={styles.chainCanvas}
           >
-            {vocalFile && appState !== "empty" && (
-              <div className={styles.fileChip}>
-                <span className={styles.fileChipName}>{vocalFile.name}</span>
-                <button
-                  className={styles.fileChipRemove}
-                  onClick={handleRemoveVocal}
-                  aria-label="Remove vocal"
-                >
-                  x
-                </button>
-              </div>
-            )}
-
-            {appState === "empty" && (
-              <>
-                <div style={{ position: "relative", zIndex: 1, opacity: 0.3, pointerEvents: "none" }}>
-                  <VisualVocalChain
-                    chain={[
-                      { step: 1, tool: "Gain", action: "Reduce input gain by -2 dB", reason: "Headroom" },
-                      { step: 2, tool: "De-Esser", action: "Tame sibilance at 6kHz", reason: "Harshness" },
-                      { step: 3, tool: "EQ", action: "High-pass at 85Hz", reason: "Remove rumble" },
-                      { step: 4, tool: "Compressor", action: "4:1 fast attack", reason: "Dynamic control" },
-                      { step: 5, tool: "EQ", action: "Boost high shelf by +1.5 dB", reason: "Air" }
-                    ]}
-                    mode="view"
-                  />
-                </div>
-
-                <div className={styles.studioDropState} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
-                  {uploadError && (
-                    <span className={styles.uploadErrorInline}>{uploadError}</span>
-                  )}
-                  <button
-                    type="button"
-                    className={styles.skipLink}
-                    onClick={() => void handleSelectedAssetAnalyze()}
-                    disabled={!selectedChainAsset}
-                  >
-                    Generate chain from selected asset
-                  </button>
-
-                  <button className={styles.skipLink} onClick={handleSkip}>
-                    Skip upload - explore without audio
-                  </button>
-                </div>
-              </>
-            )}
-
-            {appState === "analyzing" && (
-              <div className={styles.analysisCard}>
-                {ANALYSIS_STEPS.map((step, i) => (
-                  <div key={i} className={styles.analysisRow}>
-                    <span className={styles.analysisText}>{step}</span>
-                    <CheckIcon className={styles.analysisCheck} />
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeVocalRoleId}
+                className={styles.roleStage}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.22, ease: "easeOut" }}
+              >
+                {showRoleCreateState && (
+                  <div className={styles.roleEmptyState}>
+                    <span className={styles.roleEmptyKicker}>7-track architecture</span>
+                    <h2>{activeRoleMeta.label}</h2>
+                    <p>{activeRoleMeta.description}</p>
+                    <p className={styles.roleSourceNote}>
+                      Create uses the Lead measurements first. Upload role-specific audio later for a measured-role chain.
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.roleEmptyAction}
+                      onClick={() => void handleCreateVocalRole(activeVocalRoleId)}
+                      disabled={!leadHasMeasuredContext || chainLoading}
+                    >
+                      {leadHasMeasuredContext
+                        ? activeRoleMeta.createLabel
+                        : "Measure Lead first"}
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
-
-	            {appState === "results" && chainLoading && (
-	              <div className={styles.skeleton}>
-	                <span className={styles.skeletonLabel}>
-	                  Regenerating chain from measured vocal context...
-	                </span>
-	                <div className={styles.skeletonLine} />
-	                <div className={styles.skeletonLine} />
-	                <div className={styles.skeletonLine} />
-              </div>
-            )}
-
-            {appState === "results" && !chainLoading && chain.length === 0 && (
-              <div className={styles.rightEmpty}>
-                <span className={styles.rightEmptyDesc}>
-                  Drag the XY cursor or upload audio to generate a chain.
-                </span>
-              </div>
-            )}
-
-            {appState === "results" && !chainLoading && displayedChain.length > 0 && (
-              <VisualVocalChain
-                chain={displayedChain}
-                engineerNote={engineerNote}
-                mode={editState.mode}
-                isDirty={editState.isDirty}
-                hasUnsavedChanges={hasUnsavedEdit}
-                evaluating={editState.evaluating}
-                evaluationResult={editState.evaluationResult}
-                feedbackPanelOpen={editState.feedbackPanelOpen}
-                displayedMeasuredFit={measuredFitForProvenance(
-                  editState.evaluationResult?.measured_fit,
-                  cachedAnalysisProvenance
                 )}
-                currentGenre={activeEra.id}
-                currentDaw={daw || "Logic Pro"}
-                measuredFit={
-                  showMeasuredFitBadge ? "good" : editState.evaluationResult?.measured_fit
-                }
-                assistantHighlight={assistantHighlight}
-                audioPulse={audioPulse}
-                onEnterEditMode={handleEnterEditMode}
-                onEditedChainChange={handleEditedChainChange}
-                onEvaluate={handleEvaluateChain}
-                onConfirmSave={handleSaveEditedChain}
-                onDiscard={handleDiscardEdit}
-                onFeedbackPanelOpenChange={handleFeedbackPanelOpenChange}
-              />
-            )}
+
+                {!showRoleCreateState && appState === "empty" && (
+                  <>
+                    <div style={{ position: "relative", zIndex: 1, opacity: 0.3, pointerEvents: "none" }}>
+                      <VisualVocalChain
+                        chain={[
+                          { step: 1, tool: "Gain", action: "Reduce input gain by -2 dB", reason: "Headroom" },
+                          { step: 2, tool: "De-Esser", action: "Tame sibilance at 6kHz", reason: "Harshness" },
+                          { step: 3, tool: "EQ", action: "High-pass at 85Hz", reason: "Remove rumble" },
+                          { step: 4, tool: "Compressor", action: "4:1 fast attack", reason: "Dynamic control" },
+                          { step: 5, tool: "EQ", action: "Boost high shelf by +1.5 dB", reason: "Air" }
+                        ]}
+                        mode="view"
+                      />
+                    </div>
+
+                    <div className={styles.studioDropState} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
+                      {uploadError && (
+                        <span className={styles.uploadErrorInline}>{uploadError}</span>
+                      )}
+                      <button
+                        type="button"
+                        className={styles.skipLink}
+                        onClick={() => void handleSelectedAssetAnalyze()}
+                        disabled={!selectedChainAsset}
+                      >
+                        Generate Lead chain from selected asset
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {!showRoleCreateState && appState === "analyzing" && (
+                  <div className={styles.analysisCard}>
+                    {ANALYSIS_STEPS.map((step, i) => (
+                      <div key={i} className={styles.analysisRow}>
+                        <span className={styles.analysisText}>{step}</span>
+                        <CheckIcon className={styles.analysisCheck} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+	                {!showRoleCreateState && appState === "results" && chainLoading && (
+	                  <div className={styles.skeleton}>
+	                    <span className={styles.skeletonLabel}>
+	                      Regenerating chain from measured vocal context...
+	                    </span>
+	                    <div className={styles.skeletonLine} />
+	                    <div className={styles.skeletonLine} />
+	                    <div className={styles.skeletonLine} />
+                  </div>
+                )}
+
+                {!showRoleCreateState && appState === "results" && !chainLoading && chain.length === 0 && (
+                  <div className={styles.rightEmpty}>
+                    <span className={styles.rightEmptyDesc}>
+                      Drag the XY cursor or upload audio to generate a chain.
+                    </span>
+                  </div>
+                )}
+
+                {!showRoleCreateState && appState === "results" && !chainLoading && displayedChain.length > 0 && (
+                  <VisualVocalChain
+                    chain={displayedChain}
+                    engineerNote={engineerNote}
+                    mode={editState.mode}
+                    isDirty={editState.isDirty}
+                    hasUnsavedChanges={hasUnsavedEdit}
+                    evaluating={editState.evaluating}
+                    evaluationResult={editState.evaluationResult}
+                    feedbackPanelOpen={editState.feedbackPanelOpen}
+                    displayedMeasuredFit={measuredFitForProvenance(
+                      editState.evaluationResult?.measured_fit,
+                      cachedAnalysisProvenance
+                    )}
+                    currentGenre={activeEra.id}
+                    currentDaw={daw || "Logic Pro"}
+                    measuredFit={
+                      showMeasuredFitBadge ? "good" : editState.evaluationResult?.measured_fit
+                    }
+                    assistantHighlight={assistantHighlight}
+                    audioPulse={audioPulse}
+                    onEnterEditMode={handleEnterEditMode}
+                    onEditedChainChange={handleEditedChainChange}
+                    onEvaluate={handleEvaluateChain}
+                    onConfirmSave={handleSaveEditedChain}
+                    onDiscard={handleDiscardEdit}
+                    onFeedbackPanelOpenChange={handleFeedbackPanelOpenChange}
+                  />
+                )}
+              </motion.div>
+            </AnimatePresence>
           </section>
         </main>
 
@@ -2028,24 +2147,11 @@ export default function SandboxPage() {
       </ToolLockedOverlay>
       </div>
 
-      {/* ─────────────────────────────────────────────────
+      {/*
           MOBILE BOTTOM TAB BAR
-          ───────────────────────────────────────────────── */}
+ */}
       <MobileTabBar activePage="sandbox" />
 
-      <AuthModal
-        open={showSignUpPrompt}
-        onClose={() => {
-          if (!saveBusy) setShowSignUpPrompt(false);
-        }}
-        onAuthed={handleAuthedForSave}
-        initialMode="signup"
-        title="Save your chain - create a free account"
-        text="Keep this vocal chain in your mimiq projects."
-        subtext="Your chain will be saved automatically after signing up."
-        nextPath="/sandbox"
-        pendingAuthKey={SAVE_AFTER_AUTH_KEY}
-      />
     </div>
     </ProjectGate>
   );
@@ -2090,17 +2196,27 @@ function AnimatedMetricValue({ value }: { value: string }) {
 
 function WorkspaceMetricsBar({
   readouts,
+  provenance,
   busyLabel,
   canAnalyze,
   onAnalyze,
 }: {
   readouts: MetricReadout[];
+  provenance: AnalysisProvenance | null;
   busyLabel: string | null;
   canAnalyze: boolean;
   onAnalyze: () => void;
 }) {
+  const isFallback = provenance?.fallback_used === true;
+
   return (
     <section className={styles.metricsBar} aria-label="Project metrics">
+      {isFallback && (
+        <div className={styles.fallbackBanner} role="alert">
+          <span className={styles.fallbackBannerIcon}>⚠</span>
+          <span>Audio analysis unavailable — showing genre estimates, not measurements of your file.</span>
+        </div>
+      )}
       {readouts.map((readout, index) => (
         <div className={styles.metricCell} key={readout.label}>
           <span className={styles.metricIcon} aria-hidden="true">
@@ -2178,7 +2294,6 @@ function AssistantPanel({
     <aside className={styles.assistantPanel}>
       <div className={styles.assistantTabs}>
         <span className={styles.assistantTabActive}>AI Assistant</span>
-        <span>Chain Insights</span>
       </div>
 
       <section className={styles.assistantSection}>
@@ -2344,6 +2459,7 @@ function AudioTransport({
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(0.82);
   const [bypassed, setBypassed] = useState(true);
+  const [waveformData, setWaveformData] = useState<number[] | null>(null);
   const canUseProcessed = Boolean(processedUrl);
   const playbackUrl = !bypassed && processedUrl ? processedUrl : rawUrl;
 
@@ -2417,6 +2533,59 @@ function AudioTransport({
     return () => cancelAnimationFrame(frame);
   }, [playbackUrl, stopPulse]);
 
+  // Decode real audio waveform from the source file for display
+  useEffect(() => {
+    let resetFrame: number | null = null;
+    if (!rawUrl) {
+      resetFrame = requestAnimationFrame(() => setWaveformData(null));
+      return () => {
+        if (resetFrame) cancelAnimationFrame(resetFrame);
+      };
+    }
+
+    let alive = true;
+    const controller = new AbortController();
+
+    const decodeWaveform = async () => {
+      try {
+        const res = await fetch(rawUrl, { signal: controller.signal });
+        const arrayBuf = await res.arrayBuffer();
+        if (!alive) return;
+
+        const AudioCtx =
+          window.AudioContext ||
+          (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+            .webkitAudioContext;
+        if (!AudioCtx) return;
+
+        const ctx = new AudioCtx();
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        await ctx.close().catch(() => undefined);
+        if (!alive) return;
+
+        const ch = audioBuf.getChannelData(0);
+        const BARS = 34;
+        const bucket = Math.floor(ch.length / BARS);
+        const bars = Array.from({ length: BARS }, (_, i) => {
+          const slice = ch.slice(i * bucket, i * bucket + bucket);
+          const rms = Math.sqrt(
+            slice.reduce((sum, v) => sum + v * v, 0) / (slice.length || 1)
+          );
+          return Math.min(1, rms * 6);
+        });
+        if (alive) setWaveformData(bars);
+      } catch {
+        // A failed fetch just leaves the waveform empty.
+      }
+    };
+
+    void decodeWaveform();
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [rawUrl]);
+
   useEffect(
     () => () => {
       stopPulse();
@@ -2446,13 +2615,15 @@ function AudioTransport({
 
   const progress = duration > 0 ? currentTime / duration : 0;
   const bars = Array.from({ length: 34 }, (_, index) => {
-    const base = 18 + ((index * 19) % 42);
     const active = index / 34 <= progress;
+    const height = waveformData
+      ? Math.max(8, waveformData[index] * 100)
+      : 14 + ((index * 7) % 18); // slim placeholder until audio is decoded
     return (
       <span
         key={index}
         className={active ? styles.waveformBarActive : ""}
-        style={{ height: `${base}%` }}
+        style={{ height: `${height}%` }}
       />
     );
   });
@@ -2519,16 +2690,17 @@ function AudioTransport({
             onChange={(event) => setVolume(Number(event.target.value))}
           />
         </label>
-        <button
-          type="button"
-          className={`${styles.bypassToggle} ${bypassed ? styles.bypassToggleActive : ""}`}
-          disabled={!canUseProcessed}
-          onClick={() => setBypassed((value) => !value)}
-          aria-pressed={bypassed}
-          title={canUseProcessed ? "Toggle processed export monitor" : "No processed export to compare"}
-        >
-          Bypass
-        </button>
+        {canUseProcessed && (
+          <button
+            type="button"
+            className={`${styles.bypassToggle} ${bypassed ? styles.bypassToggleActive : ""}`}
+            onClick={() => setBypassed((value) => !value)}
+            aria-pressed={bypassed}
+            title="Toggle processed export monitor"
+          >
+            Bypass
+          </button>
+        )}
       </div>
     </section>
   );

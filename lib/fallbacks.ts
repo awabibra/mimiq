@@ -1,10 +1,6 @@
 import type { ChainStep, XYPosition } from "./types";
 
-/* ═══════════════════════════════════════════════════════════════
-   Generic fallback chains — one per era.
-   Used when Claude returns malformed JSON after retry.
-   Steps reference generic plugin types (stock in most DAWs).
-   ═══════════════════════════════════════════════════════════════ */
+/* Used when Claude still returns bad JSON after a retry. */
 
 interface FallbackChain {
   chain: ChainStep[];
@@ -13,7 +9,7 @@ interface FallbackChain {
 }
 
 const fallbacks: Record<string, FallbackChain> = {
-  nocturnal: {
+  rnb: {
     chain: [
       { step: 1, tool: "High-Pass Filter", action: "Cut at 80 Hz, 18 dB/oct slope", reason: "Removes sub-bass rumble without thinning the vocal warmth essential for dark R&B." },
       { step: 2, tool: "Subtractive EQ", action: "Dip −3 dB at 350 Hz, Q 2.0", reason: "Reduces boxiness that competes with pad harmonics in the low-mids." },
@@ -26,7 +22,7 @@ const fallbacks: Record<string, FallbackChain> = {
     xyPosition: { x: 0.65, y: 0.35 },
   },
 
-  volatile: {
+  trap: {
     chain: [
       { step: 1, tool: "High-Pass Filter", action: "Cut at 120 Hz, 24 dB/oct slope", reason: "Aggressive cut to prevent the vocal from clashing with heavy 808s." },
       { step: 2, tool: "Subtractive EQ", action: "Dip −4 dB at 500 Hz, Q 1.5", reason: "Clears muddiness so the vocal punches through distorted textures." },
@@ -39,20 +35,20 @@ const fallbacks: Record<string, FallbackChain> = {
     xyPosition: { x: 0.25, y: 0.7 },
   },
 
-  current: {
+  pop: {
     chain: [
-      { step: 1, tool: "High-Pass Filter", action: "Cut at 100 Hz, 18 dB/oct slope", reason: "Cleans the low end to let percussion and log drums breathe." },
-      { step: 2, tool: "Presence EQ", action: "Boost +3 dB at 3.5 kHz, Q 1.2", reason: "Pushes the vocal forward to compete with dense rhythmic elements." },
+      { step: 1, tool: "High-Pass Filter", action: "Cut at 100 Hz, 18 dB/oct slope", reason: "Cleans the low end to let the vocal sit precisely in a dense pop mix." },
+      { step: 2, tool: "Presence EQ", action: "Boost +3 dB at 3.5 kHz, Q 1.2", reason: "Pushes the vocal forward to compete with bright synths and instrumentation." },
       { step: 3, tool: "Optical Compressor", action: "3:1 ratio, 15 ms attack, auto release, −5 dB GR", reason: "Smooth leveling that maintains the melodic flow of the performance." },
       { step: 4, tool: "De-Esser", action: "Target 6.5 kHz, −3 dB reduction", reason: "Light sibilance control to keep clarity without dulling." },
-      { step: 5, tool: "Short Delay", action: "1/8 note, 15% feedback, 18% mix", reason: "Rhythmic delay that locks the vocal into the percussive groove." },
-      { step: 6, tool: "Hall Reverb", action: "1.4 s decay, 16% wet, pre-delay 25 ms", reason: "Adds depth and space without washing out the rhythmic feel." },
+      { step: 5, tool: "Short Delay", action: "1/8 note, 15% feedback, 18% mix", reason: "Rhythmic delay that locks the vocal into the groove." },
+      { step: 6, tool: "Hall Reverb", action: "1.4 s decay, 16% wet, pre-delay 25 ms", reason: "Adds depth and pristine space without washing out the rhythm." },
     ],
-    summary: "Bright, rhythmic vocal treatment for afrobeats — clarity-focused EQ, groove-locked delay, and controlled space.",
+    summary: "Bright, punchy vocal treatment for modern pop — clarity-focused EQ, controlled dynamics, and pristine space.",
     xyPosition: { x: 0.45, y: 0.6 },
   },
 
-  golden: {
+  modern_rap: {
     chain: [
       { step: 1, tool: "Gate", action: "Threshold -45 dB, 5 ms attack", reason: "Cleans up background noise before processing begins." },
       { step: 2, tool: "High-Pass Filter", action: "Cut at 90 Hz, 12 dB/oct slope", reason: "Gentle roll-off preserves the warmth of boom-bap productions." },
@@ -68,22 +64,9 @@ const fallbacks: Record<string, FallbackChain> = {
     summary: "A massive, punchy vocal chain for classic hip-hop — dual-stage compression, meticulous EQ sculpting, dynamic control, and rich analog warmth.",
     xyPosition: { x: 0.3, y: 0.5 },
   },
-
-  crystalline: {
-    chain: [
-      { step: 1, tool: "High-Pass Filter", action: "Cut at 110 Hz, 24 dB/oct slope", reason: "Steep cut to separate the vocal from sliding 808 sub-bass." },
-      { step: 2, tool: "Subtractive EQ", action: "Dip −3 dB at 300 Hz, Q 2.0", reason: "Removes muddiness to maintain the cold, sparse aesthetic." },
-      { step: 3, tool: "FET Compressor", action: "4:1 ratio, 3 ms attack, 60 ms release, −6 dB GR", reason: "Fast compression for a controlled, upfront vocal presence." },
-      { step: 4, tool: "Presence EQ", action: "Boost +2.5 dB at 4 kHz, Q 1.5", reason: "Adds cold clarity that cuts through sparse drill production." },
-      { step: 5, tool: "De-Esser", action: "Target 7 kHz, −4 dB reduction", reason: "Controls harshness in the upper frequencies after the presence boost." },
-      { step: 6, tool: "Short Plate Reverb", action: "0.8 s decay, 10% wet, pre-delay 15 ms", reason: "Minimal, tight reverb that adds width without warmth." },
-    ],
-    summary: "Cold, precise vocal chain for UK drill — tight dynamics, clinical EQ, and minimal spatial treatment.",
-    xyPosition: { x: 0.2, y: 0.65 },
-  },
 };
 
-/** Returns the fallback chain for a given era ID, or golden as default. */
+/** Returns the fallback chain for a given era ID, or modern_rap as default. */
 export function getFallbackChain(eraId: string): FallbackChain {
-  return fallbacks[eraId] ?? fallbacks.golden;
+  return fallbacks[eraId] ?? fallbacks.modern_rap;
 }

@@ -32,9 +32,14 @@ const metrics: AudioMetrics = {
   dynamicRange: 10,
   spectralCentroid: 3400,
   sibilancePeak: -9,
-  lowEndEnergy: 0.2,
+  truePeak: -3,
+  harshness: 0,
+  lowMidBuildup: 0,
+  noiseFloorDb: -50,
+  dynamicInconsistency: 0,
   stereoWidth: 0.1,
-  reverbEstimate: 0.08,
+  crestFactor: 12,
+  spectralEnvelope: Array(30).fill(0),
 };
 
 const fallback: AnalysisProvenance = {
@@ -68,7 +73,7 @@ const evaluation: EvaluationResult = {
 
 describe("Chain Lab assistant helpers", () => {
   it("maps fallback evaluation issues without inventing measured claims", () => {
-    const model = buildAssistantModel(metrics, chain, "golden", fallback, evaluation);
+    const model = buildAssistantModel(metrics, chain, "modern_rap", fallback, evaluation);
 
     expect(model.issues[0]?.claim).toBe("estimated");
     expect(model.issues[0]?.label).toBe("deesser");
@@ -76,10 +81,16 @@ describe("Chain Lab assistant helpers", () => {
   });
 
   it("uses measured claims only for measured provenance", () => {
-    const model = buildAssistantModel(metrics, chain, "golden", measured, null);
+    const model = buildAssistantModel(metrics, chain, "modern_rap", measured, null);
 
     expect(model.issues.length).toBeGreaterThan(0);
     expect(model.issues.every((issue) => issue.claim === "measured")).toBe(true);
+  });
+
+  it("handles empty evaluations without crashing", () => {
+    expect(() =>
+      buildAssistantModel(metrics, chain, "modern_rap", measured, null)
+    ).not.toThrow();
   });
 
   it("targets the closest matching chain step for evaluation fixes", () => {

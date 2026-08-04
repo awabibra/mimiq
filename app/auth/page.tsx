@@ -35,15 +35,19 @@ export default function AuthPage() {
     return safeNext(params.get("next"));
   }, []);
 
-  const callbackUrl = useCallback(() => {
-    const next = encodeURIComponent(nextPath());
-    return `${window.location.origin}/auth/callback?next=${next}`;
-  }, [nextPath]);
+  const destinationForMode = useCallback(
+    (authMode: Mode) =>
+      authMode === "signup" ? "/onboarding" : nextPath(),
+    [nextPath]
+  );
 
-  const cameFromOnboarding = useCallback(() => {
-    const params = new URLSearchParams(window.location.search);
-    return safeMode(params.get("mode")) === "signup";
-  }, []);
+  const callbackUrl = useCallback(
+    (authMode: Mode) => {
+      const next = encodeURIComponent(destinationForMode(authMode));
+      return `${window.location.origin}/auth/callback?next=${next}`;
+    },
+    [destinationForMode]
+  );
 
   useEffect(() => {
     let live = true;
@@ -51,20 +55,22 @@ export default function AuthPage() {
     getAuthSession().then((auth) => {
       if (!live) return;
 
+      const params = new URLSearchParams(window.location.search);
+      const requestedMode = safeMode(params.get("mode"));
+
       if (auth) {
-        router.replace(nextPath());
+        router.replace(destinationForMode(requestedMode));
         return;
       }
 
-      const params = new URLSearchParams(window.location.search);
-      setMode(safeMode(params.get("mode")));
+      setMode(requestedMode);
       setReady(true);
     });
 
     return () => {
       live = false;
     };
-  }, [nextPath, router]);
+  }, [destinationForMode, router]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -85,7 +91,7 @@ export default function AuthPage() {
 
         if (error) throw error;
 
-        router.replace(nextPath());
+        router.replace(destinationForMode("signin"));
         return;
       }
 
@@ -93,14 +99,14 @@ export default function AuthPage() {
         email,
         password: pass,
         options: {
-          emailRedirectTo: callbackUrl(),
+          emailRedirectTo: callbackUrl("signup"),
         },
       });
 
       if (error) throw error;
 
       if (data.session) {
-        router.replace(nextPath());
+        router.replace("/onboarding");
         return;
       }
 
@@ -123,7 +129,7 @@ export default function AuthPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: callbackUrl(),
+        redirectTo: callbackUrl(mode),
         queryParams: {
           prompt: "select_account",
         },
@@ -174,14 +180,7 @@ export default function AuthPage() {
               <button
                 type="button"
                 className={mode === "signup" ? styles.active : ""}
-                onClick={() => {
-                  if (cameFromOnboarding()) {
-                    setMode("signup");
-                    return;
-                  }
-
-                  router.push("/onboarding");
-                }}
+                onClick={() => setMode("signup")}
               >
                 Sign up
               </button>

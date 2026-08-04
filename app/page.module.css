@@ -1,6 +1,4 @@
-/* page.module.css — scrollable landing shell */
-
-/* ── Root: now scrollable ───────────────────────────── */
+/* Root: now scrollable */
 .root {
   position: relative;
   width: 100%;
@@ -10,7 +8,7 @@
   font-family: var(--font-body);
 }
 
-/* ── Fixed chrome (floats over everything while scrolling) */
+/* Fixed chrome (floats over everything while scrolling) */
 .chrome {
   position: fixed;
   top: 0;
@@ -44,7 +42,7 @@
 }
 .signIn:hover { color: rgba(240, 240, 237, 0.86); }
 
-/* ── Hero — locked to first viewport ───────────────── */
+/* First viewport */
 .hero {
   position: relative;
   z-index: 10;
@@ -59,7 +57,7 @@
   padding: 0 clamp(28px, 4vw, 56px);
 }
 
-/* ── Left: copy ─────────────────────────────────────── */
+/* Left: copy */
 .copy {
   display: flex;
   flex-direction: column;
@@ -126,14 +124,14 @@
   letter-spacing: 0.01em;
 }
 
-/* ── Right: demo ─────────────────────────────────────── */
+/* Right: demo */
 .demoWrap {
   width: 100%;
   max-width: 560px;
   justify-self: end;
 }
 
-/* ── Scroll hint — animated vertical line ────────────── */
+/* Scroll hint */
 .scrollHint {
   position: absolute;
   bottom: 28px;
@@ -157,7 +155,7 @@
   50%       { opacity: 1; transform: scaleY(1)   translateY(0); }
 }
 
-/* ── Responsive ─────────────────────────────────────── */
+/* Responsive */
 @media (max-width: 820px) {
   .hero {
     grid-template-columns: 1fr;

@@ -12,6 +12,17 @@
   box-shadow:
     0 18px 48px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+.upload[data-status="ready"] {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  animation: uploadReady 280ms ease both;
+}
+
+@keyframes uploadReady {
+  from { opacity: 0.72; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .header {
@@ -112,6 +123,72 @@
   font-size: 11px;
   font-style: normal;
   line-height: 1.2;
+}
+
+.readySummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, rgba(255, 255, 255, 0.02));
+  animation: uploadReady 280ms ease both;
+}
+
+.readySummary > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.readySummary span,
+.readySummary em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readySummary span {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.readySummary em {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.readySummary button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  transition: color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.readySummary button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.readySummary button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.readySummary button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .input {
@@ -235,6 +312,14 @@
     width: 100%;
   }
 
+  .readySummary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .readySummary > button:last-of-type {
+    grid-column: 2;
+  }
+
   .slot {
     grid-template-columns: 1fr;
   }
@@ -245,7 +330,7 @@
   }
 }
 
-/* ── Table Widget Style ── */
+/* Table Widget Style */
 
 .tableWidgetContainer {
   display: flex;
@@ -349,7 +434,7 @@
   color: var(--text-secondary);
 }
 
-/* ── Row status states ─────────────────────────────────────────────────── */
+/* Row status states */
 
 .tableWidgetRow[data-status="uploading"] .tableWidgetFilename {
   color: var(--text-secondary);
@@ -371,7 +456,7 @@
   }
 }
 
-/* ── Status/error message line below the list ─────────────────────────── */
+/* Status/error message line below the list */
 
 .tableWidgetMessage {
   margin: 3px 4px 0;

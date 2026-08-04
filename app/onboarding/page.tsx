@@ -1,203 +1,280 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { eras } from "@/lib/eras";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { Logo } from "@/components/ui/logo";
 import { getAuthSession } from "@/lib/auth";
 import { useStore } from "@/lib/store";
-import { createLocalProject, useProject } from "@/lib/useProject";
+import type { PluginBundleId, SupportedDaw } from "@/lib/types";
 import {
-  PageTransition,
-  usePageTransition,
-} from "@/components/PageTransition";
+  getUserProfile,
+  isOnboardingComplete,
+  PLUGIN_BUNDLES,
+  saveUserOnboarding,
+  SUPPORTED_DAWS,
+} from "@/lib/userProfile";
 import styles from "./page.module.css";
 
-/* ── Constants ── */
+const authPath = "/auth?mode=signup&next=%2Fonboarding";
 
-const DAWS = ["Logic Pro", "FL Studio", "Ableton Live", "Pro Tools"] as const;
-type Daw = (typeof DAWS)[number];
+function DawMark({ name }: { name: SupportedDaw }) {
+  const initials =
+    name === "Logic Pro"
+      ? "LP"
+      : name === "FL Studio"
+        ? "FL"
+        : name === "Ableton Live"
+          ? "AL"
+          : "PT";
 
-
-/* ── Inner component (needs PageTransition context) ── */
-
-function OnboardingFlow() {
-  const { navigateTo } = usePageTransition();
-  const { setDaw, setEra } = useStore();
-  const setActiveProject = useProject((state) => state.setActiveProject);
-
-  const [step, setStep] = useState(1);
-  const [phase, setPhase] = useState<"visible" | "exiting" | "entering">("visible");
-
-  const [selectedDaw, setSelectedDaw] = useState<Daw | null>(null);
-  const [selectedEra, setSelectedEra] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  /* ── Step transition ── */
-  const advanceStep = useCallback((nextStep: number) => {
-    setPhase("exiting");
-
-    setTimeout(() => {
-      setStep(nextStep);
-      setPhase("entering");
-      // Double rAF: let browser paint the "entering" position,
-      // then transition to "visible"
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setPhase("visible");
-        });
-      });
-    }, 320);
-  }, []);
-
-  /* ── DAW selection ── */
-  const handleDawSelect = useCallback(
-    (daw: Daw) => {
-      setSelectedDaw(daw);
-      setTimeout(() => advanceStep(2), 260);
-    },
-    [advanceStep]
-  );
-
-  /* ── Era selection — live-swap the CSS accent ── */
-  const handleEraSelect = useCallback((eraId: string) => {
-    setSelectedEra(eraId);
-    const era = eras.find((e) => e.id === eraId);
-    if (era) {
-      document.documentElement.style.setProperty("--accent", era.accent);
-    }
-  }, []);
-
-  const finishSetup = useCallback(async () => {
-    const auth = await getAuthSession();
-    navigateTo(auth ? "/projects" : "/auth?mode=signup&next=%2Fprojects");
-  }, [navigateTo]);
-
-  /* ── Save & navigate (uses PageTransition exit) ── */
-  const handleGo = useCallback(async () => {
-    if (!selectedDaw || !selectedEra || saving) return;
-    setSaving(true);
-
-    setDaw(selectedDaw);
-    setEra(selectedEra);
-    setActiveProject(
-      createLocalProject({
-        daw: selectedDaw,
-        era: selectedEra,
-      })
-    );
-    await finishSetup();
-  }, [
-    finishSetup,
-    selectedDaw,
-    selectedEra,
-    saving,
-    setActiveProject,
-    setDaw,
-    setEra,
-  ]);
-
-  /* ── Phase → CSS class ── */
-  const phaseClass =
-    phase === "exiting"
-      ? styles.stepExiting
-      : phase === "entering"
-        ? styles.stepEntering
-        : styles.stepVisible;
-
-  return (
-    <div className={styles.wrapper}>
-      {/* ── Progress dots ── */}
-      <div className={styles.dots}>
-        {[1, 2].map((i, index) => (
-          <div
-            key={i}
-            className={`${styles.dot} ${i <= step ? styles.dotActive : ""}`}
-            style={{ animationDelay: `${index * 0.15}s` }}
-          />
-        ))}
-      </div>
-
-      {/* ── Step content ── */}
-      <div className={styles.stepContainer}>
-        <div className={`${styles.step} ${phaseClass}`}>
-          {step === 1 ? (
-            /* ── Step 1: DAW ── */
-            <>
-              <h1 className={styles.question}>What do you make music in?</h1>
-              <p className={styles.subtext}>
-                We&apos;ll format your chain for your specific software.
-              </p>
-              <div className={styles.dawGrid}>
-                {DAWS.map((daw) => (
-                  <button
-                    key={daw}
-                    type="button"
-                    className={`${styles.dawCard} ${
-                      selectedDaw === daw ? styles.dawCardSelected : ""
-                    }`}
-                    onClick={() => handleDawSelect(daw)}
-                  >
-                    <span className={styles.dawName}>{daw}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            /* ── Step 2: Era ── */
-            <>
-              <h1 className={styles.question}>What&apos;s your mood?</h1>
-              <p className={styles.subtext}>
-                This shapes the language and approach of your chain.
-              </p>
-              <div className={styles.eraGrid}>
-                {eras.map((era) => {
-                  const isSelected = selectedEra === era.id;
-                  return (
-                    <button
-                      key={era.id}
-                      type="button"
-                      className={`${styles.eraCard} ${
-                        isSelected ? styles.eraCardSelected : ""
-                      }`}
-                      style={{
-                        "--card-accent": era.accent,
-                      } as React.CSSProperties}
-                      onClick={() => handleEraSelect(era.id)}
-                    >
-                      <span className={styles.eraName}>
-                        {era.name}
-                        {era.id === "foryou" && (
-                          <span className={styles.eraCustomLabel}>(custom)</span>
-                        )}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <button
-                type="button"
-                className={`${styles.goButton} ${
-                  selectedEra ? styles.goButtonVisible : styles.goButtonHidden
-                }`}
-                onClick={handleGo}
-                disabled={!selectedEra || saving}
-              >
-                {saving ? "Starting\u2026" : "Start creating"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  return <span className={styles.dawMark}>{initials}</span>;
 }
 
-/* ── Page (wraps with PageTransition) ── */
-
 export default function OnboardingPage() {
+  const router = useRouter();
+  const hydrateStudioProfile = useStore(
+    (state) => state.hydrateStudioProfile
+  );
+  const [userId, setUserId] = useState<string | null>(null);
+  const [selectedDaw, setSelectedDaw] = useState<SupportedDaw | null>(null);
+  const [selectedPlugins, setSelectedPlugins] = useState<PluginBundleId[]>([]);
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      const auth = await getAuthSession();
+      if (!alive) return;
+
+      if (!auth) {
+        router.replace(authPath);
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile(auth.user.id);
+        if (!alive) return;
+
+        if (isOnboardingComplete(profile) && profile?.daw) {
+          hydrateStudioProfile(profile.daw, profile.plugins);
+          router.replace("/projects");
+          return;
+        }
+
+        setUserId(auth.user.id);
+      } catch (loadError) {
+        setUserId(auth.user.id);
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Your studio setup could not be loaded."
+        );
+      }
+
+      if (alive) setReady(true);
+    }
+
+    void load();
+
+    return () => {
+      alive = false;
+    };
+  }, [hydrateStudioProfile, router]);
+
+  const togglePlugin = (plugin: PluginBundleId) => {
+    setError(null);
+    setSelectedPlugins((current) => {
+      if (current.includes(plugin)) {
+        return current.filter((entry) => entry !== plugin);
+      }
+
+      if (plugin === "waves_gold") {
+        return [
+          ...current.filter((entry) => entry !== "waves_ultimate"),
+          plugin,
+        ];
+      }
+
+      if (plugin === "waves_ultimate") {
+        return [
+          ...current.filter((entry) => entry !== "waves_gold"),
+          plugin,
+        ];
+      }
+
+      return [...current, plugin];
+    });
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!userId || !selectedDaw || busy) return;
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const profile = await saveUserOnboarding({
+        userId,
+        daw: selectedDaw,
+        plugins: selectedPlugins,
+      });
+
+      if (!profile.daw) {
+        throw new Error("Choose your DAW before continuing.");
+      }
+
+      hydrateStudioProfile(profile.daw, profile.plugins);
+      router.replace("/projects");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Your studio setup could not be saved. Try again."
+      );
+      setBusy(false);
+    }
+  };
+
+  if (!ready) {
+    return (
+      <main className={styles.loading}>
+        <Logo className={styles.loadingLogo} />
+      </main>
+    );
+  }
+
   return (
-    <PageTransition>
-      <OnboardingFlow />
-    </PageTransition>
+    <main className={styles.page}>
+      <div className={styles.noise} aria-hidden="true" />
+
+      <header className={styles.header}>
+        <Logo className={styles.logo} />
+        <div className={styles.stepReadout}>
+          <span>Studio setup</span>
+          <strong>01 / 01</strong>
+        </div>
+      </header>
+
+      <form className={styles.workspace} onSubmit={submit}>
+        <section className={styles.intro}>
+          <span className={styles.eyebrow}>Personalize your instructions</span>
+          <h1>Build around what you already own.</h1>
+          <p>
+            MimiQ will name the controls inside your DAW and prioritize the
+            plugin bundles available in your studio.
+          </p>
+        </section>
+
+        <section className={styles.section} aria-labelledby="daw-title">
+          <div className={styles.sectionHead}>
+            <div>
+              <span className={styles.sectionNumber}>01</span>
+              <h2 id="daw-title">Which DAW do you work in?</h2>
+            </div>
+            <span className={styles.required}>Required</span>
+          </div>
+
+          <div className={styles.dawGrid}>
+            {SUPPORTED_DAWS.map((daw, index) => (
+              <button
+                key={daw}
+                type="button"
+                className={`${styles.dawCard} ${
+                  selectedDaw === daw ? styles.selected : ""
+                }`}
+                style={{ "--delay": `${index * 55}ms` } as React.CSSProperties}
+                onClick={() => {
+                  setSelectedDaw(daw);
+                  setError(null);
+                }}
+                aria-pressed={selectedDaw === daw}
+              >
+                <DawMark name={daw} />
+                <span>{daw}</span>
+                <i aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className={styles.section} aria-labelledby="plugins-title">
+          <div className={styles.sectionHead}>
+            <div>
+              <span className={styles.sectionNumber}>02</span>
+              <h2 id="plugins-title">Which plugins do you own?</h2>
+            </div>
+            <span className={styles.optional}>Optional</span>
+          </div>
+
+          <div className={styles.stockStrip}>
+            <span className={styles.stockPulse} aria-hidden="true" />
+            <div>
+              <strong>
+                {selectedDaw ? `${selectedDaw} stock plugins` : "DAW stock plugins"}
+              </strong>
+              <span>Included automatically</span>
+            </div>
+          </div>
+
+          <div className={styles.pluginGrid}>
+            {PLUGIN_BUNDLES.map((plugin, index) => {
+              const selected = selectedPlugins.includes(plugin.id);
+              return (
+                <button
+                  key={plugin.id}
+                  type="button"
+                  className={`${styles.pluginCard} ${
+                    selected ? styles.selected : ""
+                  }`}
+                  style={{
+                    "--delay": `${220 + index * 45}ms`,
+                  } as React.CSSProperties}
+                  onClick={() => togglePlugin(plugin.id)}
+                  aria-pressed={selected}
+                >
+                  <span className={styles.pluginCheck} aria-hidden="true">
+                    {selected ? "✓" : "+"}
+                  </span>
+                  <span>
+                    <strong>{plugin.label}</strong>
+                    <em>{plugin.detail}</em>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className={styles.stockNote}>
+            No paid plugins? Leave this empty. Your chain will use stock tools.
+          </p>
+        </section>
+
+        <footer className={styles.footer}>
+          <div className={styles.selectionSummary} aria-live="polite">
+            <span>Current setup</span>
+            <strong>
+              {selectedDaw ?? "Choose a DAW"} · {selectedPlugins.length || "Stock"}
+              {selectedPlugins.length === 1 ? " bundle" : selectedPlugins.length > 1 ? " bundles" : " plugins"}
+            </strong>
+          </div>
+
+          <div className={styles.submitArea}>
+            {error && <p className={styles.error}>{error}</p>}
+            <button
+              type="submit"
+              className={styles.submit}
+              disabled={!selectedDaw || busy}
+            >
+              <span>{busy ? "Saving setup" : "Set up MimiQ"}</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </footer>
+      </form>
+    </main>
   );
 }

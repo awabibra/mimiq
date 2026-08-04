@@ -1,7 +1,27 @@
 import { supabase } from "@/lib/supabase";
+import {
+  defaultGenreCategory,
+  defaultGenreSubgenre,
+  isGenreCategoryId,
+  isGenreSubgenreId,
+  type GenreCategoryId,
+  type GenreSubgenreId,
+} from "@/lib/genreCatalog";
+import { getProjectVocalArchitecture } from "@/lib/vocalArchitecture";
+import { normalizeTargetProfile } from "@/lib/projectWorkflow";
 import type { AudioAssetKind, Project, ProjectPatch } from "@/lib/types";
 
 const PROJECT_FILE_BUCKET = "project-files";
+const MODERN_PROJECT_COLUMNS = [
+  "genre_category",
+  "genre_subgenre",
+  "vocal_architecture",
+  "target_profile",
+  "active_analysis_run_id",
+  "active_mix_plan_id",
+] as const;
+
+type ProjectMutationPayload = Record<string, unknown>;
 
 const cleanFilename = (name: string) =>
   name
@@ -18,7 +38,7 @@ export async function listProjects() {
 
   if (error) throw error;
 
-  return (data ?? []) as Project[];
+  return (data ?? []).map((project) => normalizeProjectRecord(project as Project));
 }
 
 export async function getProjectRecord(projectId: string) {
@@ -30,19 +50,78 @@ export async function getProjectRecord(projectId: string) {
 
   if (error) throw error;
 
-  return data as Project;
+  return normalizeProjectRecord(data as Project);
 }
 
-export async function createProjectRecord(name: string, userId: string) {
-  const { data, error } = await supabase
+function normalizeProjectRecord(project: Project): Project {
+  return {
+    ...project,
+    genre_category:
+      project.genre_category && isGenreCategoryId(project.genre_category)
+        ? project.genre_category
+        : defaultGenreCategory,
+    genre_subgenre:
+      project.genre_subgenre && isGenreSubgenreId(project.genre_subgenre)
+        ? project.genre_subgenre
+        : defaultGenreSubgenre,
+    vocal_architecture: getProjectVocalArchitecture(project),
+    target_profile: normalizeTargetProfile(project.target_profile),
+  };
+}
+
+function isSchemaCacheMiss(error: { code?: string } | null) {
+  return error?.code === "PGRST204";
+}
+
+function withoutModernProjectColumns<T extends ProjectMutationPayload>(payload: T) {
+  const next: ProjectMutationPayload = { ...payload };
+  for (const column of MODERN_PROJECT_COLUMNS) {
+    delete next[column];
+  }
+  return next;
+}
+
+export async function createProjectRecord(
+  name: string,
+  userId: string,
+  lane?: {
+    genre_category?: GenreCategoryId | string | null;
+    genre_subgenre?: GenreSubgenreId | string | null;
+  }
+) {
+  const genre_category =
+    lane?.genre_category && isGenreCategoryId(lane.genre_category)
+      ? lane.genre_category
+      : defaultGenreCategory;
+  const genre_subgenre =
+    lane?.genre_subgenre && isGenreSubgenreId(lane.genre_subgenre)
+      ? lane.genre_subgenre
+      : defaultGenreSubgenre;
+
+  const payload = {
+    name: name.trim(),
+    user_id: userId,
+    genre_category,
+    genre_subgenre,
+    vocal_architecture: getProjectVocalArchitecture(null),
+    created_at: new Date().toISOString(),
+  };
+
+  let { data, error } = await supabase
     .from("projects")
-    .insert({
-      name: name.trim(),
-      user_id: userId,
-      created_at: new Date().toISOString(),
-    })
+    .insert(payload)
     .select()
     .single();
+
+  if (isSchemaCacheMiss(error)) {
+    const retry = await supabase
+      .from("projects")
+      .insert(withoutModernProjectColumns(payload))
+      .select()
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     console.error("[projects] Supabase error code:", error.code);
@@ -52,7 +131,7 @@ export async function createProjectRecord(name: string, userId: string) {
     throw error;
   }
 
-  return data as Project;
+  return normalizeProjectRecord(data as Project);
 }
 
 export async function touchProject(projectId: string) {
@@ -69,23 +148,70 @@ export async function touchProject(projectId: string) {
 
   if (error) throw error;
 
-  return data as Project;
+  return normalizeProjectRecord(data as Project);
 }
 
 export async function saveProjectPatch(projectId: string, patch: ProjectPatch) {
-  const { data, error } = await supabase
+  const payload = {
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  let { data, error } = await supabase
     .from("projects")
-    .update({
-      ...patch,
-      updated_at: new Date().toISOString(),
-    })
+    .update(payload)
     .eq("id", projectId)
     .select("*")
     .single();
 
+  if (isSchemaCacheMiss(error)) {
+    const retry = await supabase
+      .from("projects")
+      .update(withoutModernProjectColumns(payload))
+      .eq("id", projectId)
+      .select("*")
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
   if (error) throw error;
 
-  return data as Project;
+  return normalizeProjectRecord(data as Project);
+}
+
+export async function deleteProjectRecord(project: Project) {
+  const { error } = await supabase
+    .from("projects")
+    .delete()
+    .eq("id", project.id);
+
+  if (error) throw error;
+
+  const storagePaths = [
+    ...(project.audio_assets ?? []).map((asset) => asset.storagePath),
+    ...(project.vocal_versions ?? []).map((version) => version.url),
+    project.beat_file_url,
+    project.stem_split_url,
+  ].filter(
+    (path): path is string =>
+      typeof path === "string" &&
+      path.length > 0 &&
+      !path.startsWith("http://") &&
+      !path.startsWith("https://") &&
+      !path.startsWith("/api/") &&
+      !path.startsWith("blob:") &&
+      !path.startsWith("data:")
+  );
+
+  if (storagePaths.length === 0) return;
+
+  const { error: storageError } = await supabase.storage
+    .from(PROJECT_FILE_BUCKET)
+    .remove([...new Set(storagePaths)]);
+
+  if (storageError) {
+    console.warn("[projects] Project deleted, but some stored audio could not be removed.");
+  }
 }
 
 export async function uploadProjectAudio(params: {

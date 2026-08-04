@@ -16,9 +16,7 @@ export function WaveformBackground() {
     let time = 0;
 
     const resize = () => {
-      // Use devicePixelRatio for sharp rendering
       const dpr = window.devicePixelRatio || 1;
-      // Using clientWidth/clientHeight instead of window.innerWidth because this is absolute positioned
       canvas.width = window.innerWidth * dpr;
       canvas.height = window.innerHeight * dpr;
       ctx.scale(dpr, dpr);
@@ -35,7 +33,6 @@ export function WaveformBackground() {
 
       ctx.clearRect(0, 0, width, height);
 
-      // Draw 3 overlapping sine waves
       const waves = [
         { amplitude: height * 0.15, frequency: 0.002, speed: 0.0005, phase: 0, opacity: 0.08, lineWidth: 1.5 },
         { amplitude: height * 0.2, frequency: 0.0015, speed: 0.0007, phase: Math.PI / 3, opacity: 0.06, lineWidth: 1 },
@@ -44,15 +41,13 @@ export function WaveformBackground() {
 
       waves.forEach((wave) => {
         ctx.beginPath();
-        // Create a slow breathing effect on amplitude
         const currentAmplitude = wave.amplitude + Math.sin(time * 0.0002) * (wave.amplitude * 0.2);
 
         for (let x = 0; x <= width; x += 2) {
-          // Add complex modulation to simulate oscilloscope/audio wave
-          const y = height / 2 + 
-            Math.sin(x * wave.frequency + time * wave.speed + wave.phase) * currentAmplitude * 
+          const y = height / 2 +
+            Math.sin(x * wave.frequency + time * wave.speed + wave.phase) * currentAmplitude *
             Math.sin(x * 0.0005 - time * 0.0001);
-            
+
           if (x === 0) {
             ctx.moveTo(x, y);
           } else {
@@ -65,7 +60,7 @@ export function WaveformBackground() {
         ctx.stroke();
       });
 
-      time += 16; // Approx 60fps
+      time += 16;
       animationFrameId = requestAnimationFrame(draw);
     };
 

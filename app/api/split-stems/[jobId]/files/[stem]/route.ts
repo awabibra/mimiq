@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readStemJobToken } from "@/lib/serverStemJob";
 
 async function readServiceError(res: Response) {
   const text = await res.text().catch(() => "");
@@ -11,12 +12,28 @@ async function readServiceError(res: Response) {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ jobId: string; stem: string }> }
 ) {
   const { jobId, stem } = await context.params;
+  const jobToken = new URL(req.url).searchParams.get("jobToken") ?? "";
+  const claims = readStemJobToken(jobToken);
+  if (!claims || claims.jobId !== jobId) {
+    return NextResponse.json(
+      { error: "stem_file_forbidden", message: "Stem file access is invalid." },
+      { status: 403 }
+    );
+  }
   const normalizedStem = stem.toLowerCase();
-  const allowed = new Set(["vocals", "drums", "bass", "other", "guitar", "piano"]);
+  const allowed = new Set([
+    "vocals",
+    "instrumental",
+    "drums",
+    "bass",
+    "other",
+    "guitar",
+    "piano",
+  ]);
 
   if (!allowed.has(normalizedStem)) {
     return NextResponse.json(

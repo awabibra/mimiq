@@ -1,16 +1,16 @@
 /* ============================================================
-   Vault — page.module.css
+   Vault styles
    Sidebar + main content area (no right panel)
    ============================================================ */
 
-/* ── Layout shell ── */
+/* Layout shell */
 .layout {
   display: flex;
   height: 100vh;
   overflow: hidden;
 }
 
-/* ── Main content ── */
+/* Main content */
 .main {
   flex: 1;
   min-width: 0;
@@ -24,7 +24,7 @@
     transparent;
 }
 
-/* ── Header row ── */
+/* Header row */
 .header {
   display: flex;
   align-items: center;
@@ -62,7 +62,7 @@
   user-select: none;
 }
 
-/* ── Empty state ── */
+/* Empty state */
 .emptyState {
   flex: 1;
   display: flex;
@@ -116,7 +116,7 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* ── Chain card grid ── */
+/* Chain card grid */
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -124,7 +124,7 @@
   animation: vaultFadeUp 400ms var(--ease-fade) 80ms both;
 }
 
-/* ── Individual chain card ── */
+/* Individual chain card */
 .card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
@@ -149,7 +149,7 @@
   transform: translateY(-2px);
 }
 
-/* ── Card top row: era pill + date ── */
+/* Card top row: era pill + date */
 .cardTop {
   display: flex;
   align-items: center;
@@ -191,7 +191,7 @@
   color: var(--text-tertiary);
 }
 
-/* ── Card middle: step summary + analysis ── */
+/* Card middle: step summary + analysis */
 .cardStepSummary {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -211,7 +211,7 @@
   overflow: hidden;
 }
 
-/* ── Card bottom row: XY mini + icon buttons ── */
+/* Card bottom row: XY mini + icon buttons */
 .cardBottom {
   display: flex;
   align-items: center;
@@ -219,7 +219,7 @@
   margin-top: 2px;
 }
 
-/* ── XY mini-display ── */
+/* XY mini-display */
 .xyMini {
   width: 32px;
   height: 32px;
@@ -240,7 +240,7 @@
   pointer-events: none;
 }
 
-/* ── Card icon buttons ── */
+/* Card icon buttons */
 .cardActions {
   display: flex;
   align-items: center;
@@ -272,7 +272,7 @@
   height: 16px;
 }
 
-/* ── Toast notification ── */
+/* Toast notification */
 .toast {
   position: fixed;
   bottom: 24px;
@@ -312,7 +312,7 @@
   }
 }
 
-/* ── Loading skeleton ── */
+/* Loading skeleton */
 .loadingGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -356,14 +356,14 @@
   50% { opacity: 0.8; }
 }
 
-/* ── Mobile tab bar placeholder ── */
+/* Mobile tab bar placeholder */
 .mobileTabBar {
   display: none;
 }
 
-/* ════════════════════════════════════════════
-   MOBILE RESPONSIVE — below 768px
-   ════════════════════════════════════════════ */
+/*
+   Mobile layout below 768px
+ */
 @media (max-width: 768px) {
   .layout {
     flex-direction: column;

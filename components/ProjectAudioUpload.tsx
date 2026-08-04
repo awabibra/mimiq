@@ -69,9 +69,24 @@ export function useProjectAudioUpload({
   const [lastAsset, setLastAsset] = useState<ProjectAudioAsset | null>(null);
 
   const uploadAudio = useCallback(
-    async (params: { file: File; kind: AudioAssetKind }) => {
+    async (params: {
+      file: File;
+      kind: AudioAssetKind;
+      metadata?: Pick<
+        ProjectAudioAsset,
+        | "processingStage"
+        | "sourceAssetId"
+        | "alignedBeatAssetId"
+        | "timelineStartSeconds"
+      >;
+    }) => {
       const project = useProject.getState().project;
-      if (!project || isLocalProject(project)) {
+      if (!project) {
+        setMessage("Select a saved project before uploading project audio.");
+        return null;
+      }
+
+      if (isLocalProject(project)) {
         setMessage("Select a saved project before uploading project audio.");
         return null;
       }
@@ -116,6 +131,7 @@ export function useProjectAudioUpload({
         prepared = await prepareAudioFile({
           kind: params.kind,
           file: params.file,
+          metadata: params.metadata,
         });
       } catch (error) {
         setUploading(false);
@@ -195,6 +211,8 @@ export function useProjectAudioUpload({
     uploading,
     message,
     lastAsset,
+    clearLastAsset: () => setLastAsset(null),
+    setMessage,
     uploadAudio,
   };
 }
@@ -206,7 +224,16 @@ interface ProjectAudioUploadProps {
   maxSize?: number;
   description?: string;
   disabled?: boolean;
+  metadata?: Pick<
+    ProjectAudioAsset,
+    | "processingStage"
+    | "sourceAssetId"
+    | "alignedBeatAssetId"
+    | "timelineStartSeconds"
+  >;
+  existingAsset?: ProjectAudioAsset | null;
   onUploaded?: (asset: ProjectAudioAsset) => void;
+  onRemoved?: (asset: ProjectAudioAsset) => void;
 }
 
 function UploadIcon({ className }: { className?: string }) {
@@ -235,16 +262,33 @@ export function ProjectAudioUpload({
   maxSize = DEFAULT_MAX_SIZE,
   description,
   disabled = false,
+  metadata,
+  existingAsset = null,
   onUploaded,
+  onRemoved,
 }: ProjectAudioUploadProps) {
   const [kind, setKind] = useState<AudioAssetKind>(defaultKind);
   const [dragging, setDragging] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { uploading, message, lastAsset, uploadAudio } = useProjectAudioUpload({
-    maxSize,
-    onUploaded,
-  });
-  const canUpload = !disabled && !uploading;
+  const project = useProject((state) => state.project);
+  const updateProject = useProject((state) => state.updateProject);
+  const setActiveProject = useProject((state) => state.setActiveProject);
+  const {
+    uploading,
+    message,
+    lastAsset,
+    clearLastAsset,
+    setMessage,
+    uploadAudio,
+  } = useProjectAudioUpload({ maxSize, onUploaded });
+  const currentAsset =
+    lastAsset?.status === "ready" ? lastAsset : existingAsset?.status === "ready" ? existingAsset : null;
+  const canUpload =
+    !disabled &&
+    !uploading &&
+    !removing &&
+    Boolean(project && !isLocalProject(project));
   const selectedKind = kinds.includes(kind)
     ? kind
     : kinds.includes(defaultKind)
@@ -253,7 +297,7 @@ export function ProjectAudioUpload({
 
   const handleFile = async (file: File | null) => {
     if (!file || !canUpload) return;
-    await uploadAudio({ file, kind: selectedKind });
+    await uploadAudio({ file, kind: selectedKind, metadata });
   };
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -268,6 +312,38 @@ export function ProjectAudioUpload({
     event.preventDefault();
     setDragging(false);
     void handleFile(event.dataTransfer.files[0] ?? null);
+  };
+
+  const removeAsset = async () => {
+    if (!project || !currentAsset || removing) return;
+    const nextAssets = getProjectAudioAssets(project).filter(
+      (asset) => asset.id !== currentAsset.id
+    );
+    setRemoving(true);
+    setMessage("Removing from project...");
+    try {
+      const saved = await saveProjectPatch(project.id, {
+        audio_assets: nextAssets,
+      });
+      setActiveProject(saved);
+      clearLastAsset();
+      onRemoved?.(currentAsset);
+      if (currentAsset.storagePath) {
+        try {
+          await removeProjectAudio(currentAsset.storagePath);
+          setMessage(`${currentAsset.filename} removed.`);
+        } catch {
+          setMessage("Removed from the project, but stored-file cleanup failed.");
+        }
+      } else {
+        setMessage(`${currentAsset.filename} removed.`);
+      }
+    } catch {
+      updateProject({ audio_assets: getProjectAudioAssets(project) });
+      setMessage("The file could not be removed. Try again.");
+    } finally {
+      setRemoving(false);
+    }
   };
 
   return (
@@ -294,23 +370,38 @@ export function ProjectAudioUpload({
         )}
       </div>
 
-      <button
-        type="button"
-        className={`${styles.dropzone} ${dragging ? styles.dropzoneActive : ""}`}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => {
-          event.preventDefault();
-          if (canUpload) setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        disabled={!canUpload}
-        aria-label={`${label} upload`}
-      >
-        <UploadIcon className={styles.icon} />
-        <span>{uploading ? "Uploading project audio" : "Drop audio or browse"}</span>
-        <em>{formatAudioAssetKind(selectedKind)} / up to {formatSize(maxSize)}</em>
-      </button>
+      {currentAsset ? (
+        <div className={styles.readySummary}>
+          <div>
+            <span>{currentAsset.filename}</span>
+            <em>{formatSize(currentAsset.size)} · ready</em>
+          </div>
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={!canUpload}>
+            Replace
+          </button>
+          <button type="button" onClick={() => void removeAsset()} disabled={!canUpload}>
+            {removing ? "Removing" : "Remove"}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={`${styles.dropzone} ${dragging ? styles.dropzoneActive : ""}`}
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (canUpload) setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          disabled={!canUpload}
+          aria-label={`${label} upload`}
+        >
+          <UploadIcon className={styles.icon} />
+          <span>{uploading ? "Uploading project audio" : "Drop audio or browse"}</span>
+          <em>{formatAudioAssetKind(selectedKind)} / up to {formatSize(maxSize)}</em>
+        </button>
+      )}
       <input
         ref={inputRef}
         type="file"
@@ -346,8 +437,7 @@ function ProjectAudioUploadSlot({
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Read project at render time so the button disables immediately when
-  // there is no saved project — not only after a failed upload attempt.
+  // Read it here so the button disables as soon as the project is gone.
   const project = useProject((state) => state.project);
   const { uploading, message, lastAsset, uploadAudio } = useProjectAudioUpload({
     maxSize,
@@ -379,7 +469,7 @@ function ProjectAudioUploadSlot({
   const assets = project ? getProjectAudioAssets(project) : [];
   // Show ready AND in-progress assets so the user always sees what happened.
   // "local" is the only status we hide (blob URLs that were never persisted).
-  const existingAssets = assets.filter((a) => a.kind === kind && a.status !== "local");
+  const existingAssets = assets.filter((asset) => asset.kind === kind && asset.status !== "local");
 
   const uploadButtonLabel = uploading
     ? "Uploading…"
@@ -488,11 +578,6 @@ const DEFAULT_WIDGET_SLOTS: ProjectAudioUploadWidgetSlot[] = [
     kind: "beat",
     label: "Beat",
     hint: "Optional instrumental context",
-  },
-  {
-    kind: "full_song",
-    label: "Full song",
-    hint: "Use when stems are not ready",
   },
 ];
 

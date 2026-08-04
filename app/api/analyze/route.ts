@@ -4,8 +4,11 @@ import type {
   AudioMetrics,
   AudioServiceStatus,
   ChainStep,
+  VocalRoleEvidenceSource,
+  VocalRoleId,
   XYPosition,
 } from "@/lib/types";
+import { getVocalRoleMeta, isVocalRoleId } from "@/lib/vocalArchitecture";
 import {
   GENRE_PROFILES,
   getGenreName,
@@ -17,13 +20,14 @@ import {
   resolveProjectAssetFile,
 } from "@/lib/serverProjectAudio";
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Constants
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 const CLAUDE_MAX_TOKENS = 4000;
+const DEFAULT_VOCAL_ROLE: VocalRoleId = "lead";
 
 type FastAPIMetrics = Record<string, unknown>;
 
@@ -45,9 +49,9 @@ interface CachedMetricsPayload extends Partial<AudioMetrics> {
   audio_service_status?: unknown;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Claude client — lazy singleton
-   ═══════════════════════════════════════════════════════════════ */
+/*
+   Claude client
+ */
 
 let _anthropic: Anthropic | null = null;
 function getAnthropicClient(): Anthropic {
@@ -57,9 +61,9 @@ function getAnthropicClient(): Anthropic {
   return _anthropic;
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Prompt builder
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 const DAW_PLUGINS = {
   "Logic Pro": {
@@ -81,16 +85,16 @@ const DAW_PLUGINS = {
     mastering_limiter: "Adaptive Limiter",
   },
   "FL Studio": {
-    gate: "Fruity Peak Controller",
+    gate: "Fruity Limiter",
     highpass: "Parametric EQ 2",
     subtractive_eq: "Parametric EQ 2",
-    compressor_primary: "Fruity Peak Controller",
+    compressor_primary: "Fruity Limiter",
     compressor_secondary: "Maximus",
     additive_eq: "Parametric EQ 2",
     deesser: "Parametric EQ 2",
     saturation: "Fruity WaveShaper",
     reverb_bus_reverb: "Fruity Reeverb 2",
-    reverb_bus_comp: "Fruity Peak Controller",
+    reverb_bus_comp: "Fruity Limiter",
     delay_bus: "Fruity Delay 3",
     parallel_comp_bus: "Maximus",
     width_bus: "Fruity Stereo Enhancer",
@@ -117,22 +121,22 @@ const DAW_PLUGINS = {
     mastering_limiter: "Limiter",
   },
   "Pro Tools": {
-    gate: "ReaGate",
+    gate: "Dyn3 Expander/Gate",
     highpass: "EQ3 7-Band",
     subtractive_eq: "EQ3 7-Band",
-    compressor_primary: "BF-76",
-    compressor_secondary: "LA-2A",
+    compressor_primary: "Dyn3 Compressor/Limiter",
+    compressor_secondary: "BF-76",
     additive_eq: "EQ3 7-Band",
-    deesser: "DeEsser",
+    deesser: "Dyn3 De-Esser",
     saturation: "AIR Distortion",
-    reverb_bus_reverb: "AIR Reverb",
-    reverb_bus_comp: "76",
+    reverb_bus_reverb: "D-Verb",
+    reverb_bus_comp: "Dyn3 Compressor/Limiter",
     delay_bus: "AIR Dynamic Delay",
     parallel_comp_bus: "BF-76",
     width_bus: "AIR Stereo Width",
     saturation_bus: "AIR Distortion",
-    mastering_bus_comp: "BF-2A",
-    mastering_limiter: "L1 Ultramaximizer",
+    mastering_bus_comp: "Dyn3 Compressor/Limiter",
+    mastering_limiter: "Maxim",
   },
 } satisfies Record<string, Record<string, string>>;
 
@@ -245,6 +249,10 @@ function readFallbackUsed(value: unknown) {
   return typeof value === "boolean" ? value : true;
 }
 
+function readNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
@@ -266,16 +274,24 @@ function getDawName(daw: string): DawName {
   return "Logic Pro";
 }
 
+function readVocalRoleId(value: FormDataEntryValue | null): VocalRoleId {
+  return typeof value === "string" && isVocalRoleId(value)
+    ? value
+    : DEFAULT_VOCAL_ROLE;
+}
+
 function buildPrompt(
   metrics: AudioMetrics,
   daw: string,
   eraId: string,
+  vocalRoleId: VocalRoleId,
   xyX?: number,
   xyY?: number
 ): string {
   const dawName = getDawName(daw);
   const genre = getGenreName(eraId);
   const profile = GENRE_PROFILES[genre];
+  const roleMeta = getVocalRoleMeta(vocalRoleId);
   const lufsDelta = metrics.lufs - profile.lufs_target;
   const dynamicRangeDelta = metrics.dynamicRange - profile.dynamic_range_target;
   const truePeak = metrics.truePeak ?? "unknown";
@@ -297,17 +313,19 @@ Vocal metrics:
 - Dynamic range: ${round(metrics.dynamicRange)} LRA (target: ${profile.dynamic_range_target})
 - Spectral centroid: ${Math.round(metrics.spectralCentroid)} Hz
 - Sibilance peak: ${round(metrics.sibilancePeak ?? -12)} dBFS
-- True peak: ${truePeak} dBFS
+- Peak level (sample): ${truePeak} dBFS
 - Dry/wet preference: ${xyX == null ? "profile default" : round(xyX, 2)} (0 = dry, 1 = wet)
 - Dark/bright preference: ${xyY == null ? "profile default" : round(xyY, 2)} (0 = dark, 1 = bright)
+- Vocal role: ${roleMeta.label}
 
 Deterministic context:
 - mimiq calculates every gate, high-pass, compressor, EQ, de-esser, saturation, bus, and limiter setting locally from the measured metrics and the ${dawName} profile.
+- Non-lead roles are lead-derived plans unless separate role audio was measured.
 - The loudness rule is: the vocal is ${lufsRule} the target.
 - The dynamics rule is: the vocal is ${dynamicRangeDelta > 0 ? "wider than target" : "tighter than target"}.
 - The brightness rule is: ${brightnessRule}.
 
-Respond with explanation text only, no JSON parameter values. Write one concise sentence explaining why the deterministic chain direction makes sense for this measured vocal.`;
+Respond with explanation text only, no JSON parameter values. Write one concise sentence explaining why the deterministic chain direction makes sense for this vocal role.`;
 }
 
 function ratioValue(ratio: string) {
@@ -317,11 +335,12 @@ function ratioValue(ratio: string) {
   return match ? Number(match[1]) : 3;
 }
 
-function adjustRatio(base: string, dynamicDelta: number) {
+function adjustRatio(base: string, crestFactor: number) {
   if (base.toLowerCase().includes("all")) return base;
 
   const ratio = ratioValue(base);
-  const adjusted = clamp(ratio + dynamicDelta * 0.35, 1, 10);
+  const dynamicDelta = (crestFactor - 10) * 0.5;
+  const adjusted = clamp(ratio + dynamicDelta, 1, 10);
   const rounded = round(adjusted, Number.isInteger(adjusted) ? 0 : 1);
   return `${rounded}:1`;
 }
@@ -376,13 +395,19 @@ function buildDeterministicPayload(
   const darkBoost = centroid < 2000 ? clamp((2000 - centroid) / 700, 0, 2) : 0;
   const brightCut = centroid > 3000 ? clamp((centroid - 3000) / 900, 0, 2) : 0;
   const primary = profile.compression.primary;
-  const gateThreshold = profile.gate.threshold_db + clamp((metrics.breathNoise ?? -45) + 45, -4, 4);
-  const highpass = profile.eq.highpass_hz + clamp((metrics.lowEndEnergy ?? 0.3) * 18, 0, 18);
+  const gateThreshold = profile.gate.threshold_db;
+  const highpass = profile.eq.highpass_hz;
   const deessBoost = sibilance > -12 ? clamp((sibilance + 12) * 0.75, 0, 3) : -0.25;
   const compressorThreshold =
     primary.threshold_db - quietGap * 0.5 + loudGap * 0.35 - Math.max(0, dynamicDelta) * 0.35;
 
-  const boosts = profile.eq.additive.map((boost) => ({
+  let subtractiveCuts = profile.eq.subtractive.map((cut) => ({
+    frequency_hz: cut.frequency,
+    gain_db: cut.gain_db,
+    q: cut.q,
+  }));
+
+  let additiveBoosts = profile.eq.additive.map((boost) => ({
     frequency_hz: boost.frequency,
     gain_db: round(
       boost.gain_db +
@@ -392,6 +417,34 @@ function buildDeterministicPayload(
     q: boost.q,
     type: boost.type,
   }));
+
+  if (profile.spectral_envelope && metrics.spectralEnvelope?.length === 30 && profile.spectral_envelope.length === 30) {
+    const melFreqs = Array.from({length: 30}, (_, i) => Math.round(100 * Math.pow(16000/100, i/29)));
+    const eqMatches = [];
+    for (let i = 0; i < 30; i++) {
+      eqMatches.push({ freq: melFreqs[i], diff: profile.spectral_envelope[i] - metrics.spectralEnvelope[i] });
+    }
+    eqMatches.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+    const cuts = eqMatches.filter(e => e.diff < -1).slice(0, 3);
+    const boosts = eqMatches.filter(e => e.diff > 1).slice(0, 3);
+
+    if (cuts.length > 0) {
+      subtractiveCuts = cuts.map(c => ({
+        frequency_hz: c.freq,
+        gain_db: round(clamp(c.diff, -6, -1), 1),
+        q: 2.0
+      }));
+    }
+    if (boosts.length > 0) {
+      additiveBoosts = boosts.map(b => ({
+        frequency_hz: b.freq,
+        gain_db: round(clamp(b.diff, 1, 6), 1),
+        q: 1.5,
+        type: "bell" as const
+      }));
+    }
+  }
 
   return {
     main_chain: {
@@ -407,16 +460,12 @@ function buildDeterministicPayload(
         plugin: plugins.highpass,
       },
       subtractive_eq: {
-        cuts: profile.eq.subtractive.map((cut) => ({
-          frequency_hz: cut.frequency,
-          gain_db: round(cut.gain_db - clamp((metrics.lowEndEnergy ?? 0.3) * 0.8, 0, 1)),
-          q: cut.q,
-        })),
+        cuts: subtractiveCuts,
         plugin: plugins.subtractive_eq,
       },
       compressor_primary: {
         style: primary.style,
-        ratio: adjustRatio(primary.ratio, dynamicDelta),
+        ratio: adjustRatio(primary.ratio, metrics.crestFactor),
         attack_ms: primary.attack_ms,
         release_ms: Math.round(clamp(primary.release_ms + Math.max(0, dynamicDelta) * 8, 35, 700)),
         threshold_db: round(clamp(compressorThreshold, -36, -12)),
@@ -433,7 +482,7 @@ function buildDeterministicPayload(
             },
           }
         : {}),
-      additive_eq: { boosts, plugin: plugins.additive_eq },
+      additive_eq: { boosts: additiveBoosts, plugin: plugins.additive_eq },
       deesser: {
         frequency_hz: profile.deesser.frequency,
         reduction_db: round(clamp(profile.deesser.reduction_db + deessBoost, 1, 8)),
@@ -568,7 +617,7 @@ function buildChain(payload: ChainPayload, metrics: AudioMetrics, genre: GenreNa
     role: "gate",
     tool: payload.main_chain.gate.plugin,
     action: `Threshold ${formatDb(payload.main_chain.gate.threshold_db)}, attack ${payload.main_chain.gate.attack_ms} ms, release ${payload.main_chain.gate.release_ms} ms`,
-    reason: `The ${round(metrics.breathNoise ?? -45)} dB noise floor is cleaned before the ${genre} dynamics stack raises room tone.`,
+    reason: `The noise floor is cleaned before the ${genre} dynamics stack raises room tone.`,
   });
   push({
     bus: "main",
@@ -724,9 +773,175 @@ function buildChain(payload: ChainPayload, metrics: AudioMetrics, genre: GenreNa
   return steps;
 }
 
-function buildSummary(metrics: AudioMetrics, genre: GenreName) {
+function roleStep(
+  role: string,
+  tool: string,
+  action: string,
+  reason: string,
+  note?: string
+): Omit<ChainStep, "step"> {
+  return {
+    bus: "main",
+    role,
+    tool,
+    action,
+    reason,
+    ...(note ? { note } : {}),
+  };
+}
+
+function applyVocalRoleChain(params: {
+  baseChain: ChainStep[];
+  vocalRoleId: VocalRoleId;
+  dawName: DawName;
+  genre: GenreName;
+  roleSource: VocalRoleEvidenceSource;
+}) {
+  const { baseChain, vocalRoleId, dawName, genre, roleSource } = params;
+  if (vocalRoleId === "lead") return baseChain;
+
+  const plugins = DAW_PLUGINS[dawName];
+  const eqPlugin = plugins.additive_eq;
+  const derivedNote =
+    roleSource === "lead_derived"
+      ? "Lead-derived plan - upload this role later for measured role-specific validation."
+      : undefined;
+  const roleMeta = getVocalRoleMeta(vocalRoleId);
+
+  const roleSteps: Omit<ChainStep, "step">[] =
+    vocalRoleId === "tight_double"
+      ? [
+          roleStep(
+            "role_setup",
+            "Track placement",
+            "Pan separate take +/-15-20, level -8 to -10 dB below Lead",
+            "The tight double glues the Lead without becoming a second obvious vocal.",
+            derivedNote
+          ),
+          roleStep(
+            "role_filter",
+            eqPlugin,
+            "Low-pass around 8 kHz before ambience",
+            "Removing upper air keeps the double from fighting the Lead's intelligibility."
+          ),
+        ]
+      : vocalRoleId === "wide_double"
+        ? [
+            roleStep(
+              "role_setup",
+              "Track placement",
+              "Pan separate take +/-30-40, level -12 to -15 dB below Lead",
+              "The wide double adds stereo size with minimal center competition.",
+              derivedNote
+            ),
+            roleStep(
+              "role_filter",
+              eqPlugin,
+              "High-pass around 200 Hz and low-pass around 6 kHz",
+              "Heavy filtering keeps width from adding mud or harsh top-end."
+            ),
+          ]
+        : vocalRoleId === "harmonies"
+          ? [
+              roleStep(
+                "role_setup",
+                "Harmony placement",
+                "Set harmony stack -15 to -20 dB below Lead and keep it behind the hook",
+                "Harmonies should add emotional weight without pulling focus.",
+                derivedNote
+              ),
+              roleStep(
+                "role_filter",
+                eqPlugin,
+                "Heavily filter low body and upper sibilance before compression",
+                "Stacked harmonies multiply mud and consonants faster than a single lead."
+              ),
+              roleStep(
+                "role_deesser",
+                plugins.deesser,
+                "Aggressive de-essing around the measured sibilance range",
+                "Stacked S sounds can become the first thing listeners hear."
+              ),
+            ]
+          : vocalRoleId === "adlibs"
+            ? [
+                roleStep(
+                  "role_setup",
+                  "Adlib placement",
+                  "Pan +/-20-30, level -10 to -12 dB below Lead, automate throws around phrases",
+                  "Adlibs should carry character and reaction without masking the main take.",
+                  derivedNote
+                ),
+                roleStep(
+                  "role_fx",
+                  plugins.reverb_bus_reverb,
+                  `Shorter ${genre} ambience with more effect character than the Lead`,
+                  "A separate space makes adlibs feel intentional instead of copied from the main vocal."
+                ),
+                roleStep(
+                  "role_tone",
+                  plugins.saturation,
+                  "Parallel edge and phrase-end delay emphasis",
+                  "The adlib lane is where genre character can be more animated."
+                ),
+              ]
+            : vocalRoleId === "backing_bus"
+              ? [
+                  roleStep(
+                    "backing_bus_glue",
+                    plugins.compressor_primary,
+                    "Glue compression around 3:1, slow attack, light gain reduction",
+                    "Doubles, harmonies, and adlibs should move as one controlled stack.",
+                    derivedNote
+                  ),
+                  roleStep(
+                    "backing_bus_tone",
+                    eqPlugin,
+                    "Subtle low-mid cleanup and softened upper air on the backing return",
+                    "The backing bus supports the Lead instead of creating a second lead tone."
+                  ),
+                ]
+              : [
+                  roleStep(
+                    "vocal_bus_glue",
+                    plugins.mastering_bus_comp,
+                    "Final vocal glue, slow attack, 1-2 dB gain reduction",
+                    "Lead and backing bus need to feel like one vocal instrument.",
+                    derivedNote
+                  ),
+                  roleStep(
+                    "vocal_bus_limit",
+                    plugins.mastering_limiter,
+                    "Catch only the vocal bus peaks after glue compression",
+                    "Final peak control protects the stack without claiming the song is mastered."
+                  ),
+                ];
+
+  const nextChain =
+    vocalRoleId === "backing_bus" || vocalRoleId === "vocal_bus"
+      ? roleSteps
+      : [...roleSteps, ...baseChain];
+
+  return nextChain.map((step, index) => ({
+    ...step,
+    step: index + 1,
+    note: index === 0 && !step.note ? `${roleMeta.label} role chain.` : step.note,
+  }));
+}
+
+function buildSummary(
+  metrics: AudioMetrics,
+  genre: GenreName,
+  vocalRoleId: VocalRoleId,
+  roleSource: VocalRoleEvidenceSource
+) {
   const profile = GENRE_PROFILES[genre];
-  return `${genre} chain targeting ${profile.lufs_target} LUFS and ${profile.dynamic_range_target} LRA from a ${round(metrics.lufs)} LUFS vocal. ${profile.philosophy}`;
+  const roleMeta = getVocalRoleMeta(vocalRoleId);
+  const sourceLabel =
+    roleSource === "lead_derived" && vocalRoleId !== "lead"
+      ? " Lead-derived plan, not measured from separate role audio."
+      : "";
+  return `${roleMeta.label} ${genre} chain targeting ${profile.lufs_target} LUFS and ${profile.dynamic_range_target} LRA from a ${round(metrics.lufs)} LUFS vocal.${sourceLabel} ${profile.philosophy}`;
 }
 
 function buildXYPosition(payload: ChainPayload, xyX?: number, xyY?: number): XYPosition {
@@ -749,14 +964,26 @@ function buildChainResponse(
   daw: string,
   eraId: string,
   xyX?: number,
-  xyY?: number
+  xyY?: number,
+  vocalRoleId: VocalRoleId = DEFAULT_VOCAL_ROLE,
+  roleSource: VocalRoleEvidenceSource = vocalRoleId === "lead"
+    ? "measured_role"
+    : "lead_derived"
 ): ClaudeChainResponse {
   const genre = getGenreName(eraId);
-  const payload = buildDeterministicPayload(metrics, genre, getDawName(daw), xyX, xyY);
+  const dawName = getDawName(daw);
+  const payload = buildDeterministicPayload(metrics, genre, dawName, xyX, xyY);
+  const baseChain = buildChain(payload, metrics, genre);
 
   return {
-    chain: buildChain(payload, metrics, genre),
-    summary: buildSummary(metrics, genre),
+    chain: applyVocalRoleChain({
+      baseChain,
+      vocalRoleId,
+      dawName,
+      genre,
+      roleSource,
+    }),
+    summary: buildSummary(metrics, genre, vocalRoleId, roleSource),
     xyPosition: buildXYPosition(payload, xyX, xyY),
     engineer_note: payload.engineer_note,
   };
@@ -767,6 +994,8 @@ async function callClaudeWithRetry(params: {
   metrics: AudioMetrics;
   daw: string;
   eraId: string;
+  vocalRoleId: VocalRoleId;
+  roleSource: VocalRoleEvidenceSource;
   xyX?: number;
   xyY?: number;
 }): Promise<ClaudeChainResponse> {
@@ -775,7 +1004,9 @@ async function callClaudeWithRetry(params: {
     params.daw,
     params.eraId,
     params.xyX,
-    params.xyY
+    params.xyY,
+    params.vocalRoleId,
+    params.roleSource
   );
   let client: Anthropic;
   try {
@@ -812,272 +1043,78 @@ async function callClaudeWithRetry(params: {
   return deterministic;
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    Audio service call
-   ═══════════════════════════════════════════════════════════════ */
-
-const numberOr = (value: unknown, fallback: number) => {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-};
-
-const metricNumber = (fallback: number, ...values: unknown[]) => {
-  for (const value of values) {
-    const parsed = numberOr(value, Number.NaN);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-};
-
-const normalizeDb = (value: unknown, min: number, max: number) => {
-  const db = numberOr(value, min);
-  return Math.max(0, Math.min(1, (db - min) / (max - min)));
-};
-
-function getGenreDefaultMetrics(eraId: string, beatFile?: File | null): AudioMetrics {
-  const defaults: Record<string, AudioMetrics> = {
-    nocturnal: {
-      lufs: -18,
-      dynamicRange: 8,
-      spectralCentroid: 1800,
-      reverbDecay: 0.5,
-      sibilancePeak: -14,
-      pitchVariance: 0.45,
-      breathNoise: -46,
-      dynamicInconsistency: 0.32,
-      lowEndEnergy: 0.32,
-      stereoWidth: 0.2,
-      reverbEstimate: 0.24,
-    },
-    volatile: {
-      lufs: -15,
-      dynamicRange: 6,
-      spectralCentroid: 2600,
-      reverbDecay: 0.22,
-      sibilancePeak: -11,
-      pitchVariance: 0.58,
-      breathNoise: -43,
-      dynamicInconsistency: 0.42,
-      lowEndEnergy: 0.42,
-      stereoWidth: 0.16,
-      reverbEstimate: 0.12,
-    },
-    current: {
-      lufs: -16,
-      dynamicRange: 7,
-      spectralCentroid: 2300,
-      reverbDecay: 0.38,
-      sibilancePeak: -12,
-      pitchVariance: 0.52,
-      breathNoise: -45,
-      dynamicInconsistency: 0.34,
-      lowEndEnergy: 0.34,
-      stereoWidth: 0.24,
-      reverbEstimate: 0.18,
-    },
-    golden: {
-      lufs: -17,
-      dynamicRange: 9,
-      spectralCentroid: 1900,
-      reverbDecay: 0.24,
-      sibilancePeak: -15,
-      pitchVariance: 0.42,
-      breathNoise: -48,
-      dynamicInconsistency: 0.28,
-      lowEndEnergy: 0.3,
-      stereoWidth: 0.1,
-      reverbEstimate: 0.1,
-    },
-    crystalline: {
-      lufs: -16,
-      dynamicRange: 6.5,
-      spectralCentroid: 3000,
-      reverbDecay: 0.28,
-      sibilancePeak: -10,
-      pitchVariance: 0.5,
-      breathNoise: -44,
-      dynamicInconsistency: 0.36,
-      lowEndEnergy: 0.24,
-      stereoWidth: 0.14,
-      reverbEstimate: 0.09,
-    },
-    foryou: {
-      lufs: -15,
-      dynamicRange: 6,
-      spectralCentroid: 2200,
-      reverbDecay: 0.32,
-      sibilancePeak: -12,
-      pitchVariance: 0.46,
-      breathNoise: -46,
-      dynamicInconsistency: 0.3,
-      lowEndEnergy: 0.28,
-      stereoWidth: 0.18,
-      reverbEstimate: 0.14,
-    },
-  };
-
-  const aliases: Record<string, string> = {
-    rnb: "nocturnal",
-    trap: "volatile",
-    foryou: "foryou",
-  };
-  const metrics = defaults[eraId] ?? defaults[aliases[eraId]] ?? defaults.golden;
-  return {
-    ...metrics,
-    beatLufs: beatFile ? -12.8 : undefined,
-    collisionFrequency: beatFile ? 350 : undefined,
-  };
-}
-
-function completeMetrics(
-  metrics: Partial<AudioMetrics>,
-  eraId: string,
-  beatFile?: File | null
-): AudioMetrics {
-  const defaults = getGenreDefaultMetrics(eraId, beatFile);
-  return {
-    ...defaults,
-    ...metrics,
-    lufs: numberOr(metrics.lufs, defaults.lufs),
-    dynamicRange: numberOr(metrics.dynamicRange, defaults.dynamicRange),
-    truePeak: metrics.truePeak,
-    spectralCentroid: numberOr(metrics.spectralCentroid, defaults.spectralCentroid),
-    reverbDecay: numberOr(metrics.reverbDecay, defaults.reverbDecay ?? 0.3),
-    sibilancePeak: numberOr(metrics.sibilancePeak, defaults.sibilancePeak ?? -12),
-    pitchVariance: numberOr(metrics.pitchVariance, defaults.pitchVariance ?? 0.5),
-    breathNoise: numberOr(metrics.breathNoise, defaults.breathNoise ?? -45),
-    dynamicInconsistency: numberOr(
-      metrics.dynamicInconsistency,
-      defaults.dynamicInconsistency ?? 0.3
-    ),
-    lowEndEnergy: numberOr(metrics.lowEndEnergy, defaults.lowEndEnergy),
-    stereoWidth: numberOr(metrics.stereoWidth, defaults.stereoWidth),
-    reverbEstimate: numberOr(metrics.reverbEstimate, defaults.reverbEstimate),
-  };
-}
-
-function parseClientMetrics(header: string | null): Partial<AudioMetrics> {
-  if (!header) return {};
-
-  try {
-    const metrics = JSON.parse(header) as Partial<AudioMetrics>;
-    return {
-      lufs: Number.isFinite(metrics.lufs) ? metrics.lufs : undefined,
-      dynamicRange: Number.isFinite(metrics.dynamicRange)
-        ? metrics.dynamicRange
-        : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function withClientMetricsFallback(
-  clientMetrics: Partial<AudioMetrics>,
-  eraId: string,
-  beatFile: File | null
-): AudioMetrics {
-  const defaults = getGenreDefaultMetrics(eraId, beatFile);
-  return {
-    ...defaults,
-    lufs: numberOr(clientMetrics.lufs, defaults.lufs),
-    dynamicRange: numberOr(clientMetrics.dynamicRange, defaults.dynamicRange),
-  };
-}
+ */
 
 function transformAudioServiceResponse(raw: unknown): AudioMetrics {
   const data = raw as FastAPIAnalyzeResponse;
-  const vocal = (data.vocal ?? raw ?? {}) as FastAPIMetrics;
-  const beat = data.beat ?? null;
-  const firstCollision = data.frequency_collisions?.[0];
+  const vocal = (data.vocal ?? raw ?? {}) as Record<string, unknown>;
+  const beat = (data.beat ?? null) as Record<string, unknown> | null;
+  const firstCollision = data.frequency_collisions?.[0] ?? null;
 
   return {
-    lufs: metricNumber(-18, vocal.lufs_integrated, vocal.lufs),
-    dynamicRange: metricNumber(7, vocal.dynamic_range, vocal.dynamicRange),
-    truePeak: metricNumber(
-      -1,
-      vocal.true_peak,
-      vocal.truePeak,
-      vocal.true_peak_estimate_db,
-      vocal.truePeakEstimateDb,
-      vocal.peak_db
-    ),
-    sibilanceEnergy: metricNumber(
-      0,
-      vocal.sibilance_energy,
-      vocal.sibilanceEnergy
-    ),
-    harshness: metricNumber(0, vocal.harshness),
-    lowMidBuildup: metricNumber(
-      0,
-      vocal.low_mid_buildup,
-      vocal.lowMidBuildup
-    ),
-    noiseFloorDb: metricNumber(
-      -45,
-      vocal.noise_floor_db,
-      vocal.noiseFloorDb
-    ),
-    truePeakEstimateDb: metricNumber(
-      -1,
-      vocal.true_peak_estimate_db,
-      vocal.truePeakEstimateDb
-    ),
-    crestFactorDb: metricNumber(
-      0,
-      vocal.crest_factor_db,
-      vocal.crestFactorDb
-    ),
-    spectralCentroid: metricNumber(
-      2000,
-      vocal.spectral_centroid,
-      vocal.spectralCentroid
-    ),
-    reverbDecay: metricNumber(0.3, vocal.reverb_decay, vocal.reverbDecay),
-    sibilancePeak: metricNumber(-12, vocal.sibilance_peak, vocal.sibilancePeak),
-    pitchVariance: metricNumber(0.5, vocal.pitch_variance, vocal.pitchVariance),
-    breathNoise: metricNumber(-45, vocal.breath_noise, vocal.breathNoise),
-    dynamicInconsistency: metricNumber(
-      0.3,
-      vocal.dynamic_inconsistency,
-      vocal.dynamicInconsistency
-    ),
-    lowEndEnergy: metricNumber(
-      normalizeDb(vocal.rms_db, -45, -8),
-      vocal.low_end_energy,
-      vocal.lowEndEnergy
-    ),
-    stereoWidth: metricNumber(0, vocal.stereo_width, vocal.stereoWidth),
-    reverbEstimate: metricNumber(
-      metricNumber(0.1, vocal.reverb_decay, vocal.reverbDecay),
-      vocal.reverb_estimate,
-      vocal.reverbEstimate,
-      vocal.spectral_flatness
-    ),
-    beatLufs: beat
-      ? metricNumber(-18, beat.lufs_integrated, beat.lufs)
-      : undefined,
-    collisionFrequency: firstCollision
-      ? metricNumber(0, firstCollision.vocal_centroid, firstCollision.beat_centroid)
-      : undefined,
+    lufs: vocal.lufs ?? vocal.lufs_integrated,
+    dynamicRange: vocal.dynamic_range ?? vocal.dynamicRange,
+    spectralCentroid: vocal.spectral_centroid ?? vocal.spectralCentroid,
+    truePeak: vocal.true_peak_db ?? vocal.truePeak ?? vocal.true_peak ?? vocal.peak_db,
+    harshness: vocal.harshness,
+    lowMidBuildup: vocal.low_mid_buildup ?? vocal.lowMidBuildup,
+    noiseFloorDb: vocal.noise_floor_db ?? vocal.noiseFloorDb,
+    sibilancePeak: vocal.sibilance_peak ?? vocal.sibilancePeak,
+    dynamicInconsistency: vocal.dynamic_inconsistency ?? vocal.dynamicInconsistency,
+    stereoWidth: vocal.stereo_width ?? vocal.stereoWidth,
+    crestFactor: vocal.crest_factor ?? vocal.crestFactor,
+    spectralEnvelope: vocal.spectral_envelope ?? vocal.spectralEnvelope,
+    duration: vocal.duration,
+    sampleRate: vocal.sample_rate ?? vocal.sampleRate,
+    bitDepth: vocal.bit_depth ?? vocal.bitDepth,
+    channels: vocal.channels,
+    beatLufs: beat ? (beat.lufs ?? beat.lufs_integrated) : undefined,
+    collisionFrequency:
+      firstCollision &&
+      typeof firstCollision.frequency_low_hz === "number" &&
+      typeof firstCollision.frequency_high_hz === "number"
+        ? (firstCollision.frequency_low_hz + firstCollision.frequency_high_hz) / 2
+        : undefined,
+  } as AudioMetrics;
+}
+
+function estimateFallbackMetrics(vocalFile: File, beatFile: File | null): AudioMetrics {
+  const sizeMb = vocalFile.size / (1024 * 1024);
+  const hasBeat = Boolean(beatFile);
+
+  return {
+    lufs: round(clamp(-18 + Math.log10(Math.max(sizeMb, 0.1)) * 1.6, -22, -12)),
+    dynamicRange: hasBeat ? 11.5 : 12.5,
+    spectralCentroid: hasBeat ? 2450 : 2550,
+    truePeak: -3,
+    harshness: 0.35,
+    lowMidBuildup: 0.35,
+    noiseFloorDb: -54,
+    sibilancePeak: -13,
+    dynamicInconsistency: 0.45,
+    stereoWidth: hasBeat ? 0.45 : 0.28,
+    crestFactor: 10,
+    spectralEnvelope: [],
+    duration: undefined,
+    sampleRate: undefined,
+    bitDepth: undefined,
+    channels: undefined,
+    beatLufs: hasBeat ? -14 : undefined,
+    collisionFrequency: undefined,
   };
 }
 
 async function analyzeAudio(
   vocalFile: File,
-  beatFile: File | null,
-  eraId: string,
-  clientMetrics: Partial<AudioMetrics>
+  beatFile: File | null
 ): Promise<AudioAnalysisResult> {
   const serviceUrl = process.env.AUDIO_SERVICE_URL;
   if (!serviceUrl) {
-    console.warn("[analyze] Using client-side metrics fallback.");
+    console.warn("[analyze] AUDIO_SERVICE_URL missing; using labeled fallback metrics.");
     return {
-      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      metrics: estimateFallbackMetrics(vocalFile, beatFile),
       fallback_used: true,
       audio_service_status: "fallback",
     };
@@ -1095,58 +1132,68 @@ async function analyzeAudio(
     });
 
     if (!res.ok) {
-      console.warn(`[analyze] Audio service returned ${res.status}.`);
-      console.warn("[analyze] Using client-side metrics fallback.");
-      return {
-        metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
-        fallback_used: true,
-        audio_service_status: "fallback",
-      };
+      throw new Error(`Audio service returned ${res.status}`);
     }
 
+    const metrics = transformAudioServiceResponse(await res.json());
     return {
-      metrics: transformAudioServiceResponse(await res.json()),
+      metrics: {
+        ...metrics,
+        lufs: readNumber(metrics.lufs, -18),
+        dynamicRange: readNumber(metrics.dynamicRange, 12),
+        spectralCentroid: readNumber(metrics.spectralCentroid, 2550),
+        truePeak: readNumber(metrics.truePeak, -3),
+        harshness: readNumber(metrics.harshness, 0.35),
+        lowMidBuildup: readNumber(metrics.lowMidBuildup, 0.35),
+        noiseFloorDb: readNumber(metrics.noiseFloorDb, -54),
+        sibilancePeak: readNumber(metrics.sibilancePeak, -13),
+        dynamicInconsistency: readNumber(metrics.dynamicInconsistency, 0.45),
+        crestFactor: readNumber(metrics.crestFactor, 10),
+        spectralEnvelope: Array.isArray(metrics.spectralEnvelope)
+          ? metrics.spectralEnvelope
+          : [],
+      },
       fallback_used: false,
       audio_service_status: "ok",
     };
   } catch (error) {
-    console.warn("[analyze] Audio service unavailable.", error);
-    console.warn("[analyze] Using client-side metrics fallback.");
+    console.error("[analyze] Audio service unavailable; using labeled fallback metrics:", error);
     return {
-      metrics: withClientMetricsFallback(clientMetrics, eraId, beatFile),
+      metrics: estimateFallbackMetrics(vocalFile, beatFile),
       fallback_used: true,
       audio_service_status: "fallback",
     };
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/*
    POST handler
-   ═══════════════════════════════════════════════════════════════ */
+ */
 
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
 
     const daw = (formData.get("daw") as string) || "Logic Pro";
-    const eraId = (formData.get("era") as string) || "golden";
+    const eraId = (formData.get("era") as string) || "modern_rap";
+    const vocalRoleId = readVocalRoleId(formData.get("vocalRoleId"));
+    const roleSource: VocalRoleEvidenceSource =
+      vocalRoleId === "lead" ? "measured_role" : "lead_derived";
     const xyXRaw = formData.get("xyX") as string | null;
     const xyYRaw = formData.get("xyY") as string | null;
     const cachedMetricsRaw = formData.get("cachedMetrics") as string | null;
-    const clientMetrics = parseClientMetrics(
-      req.headers.get("x-client-audio-metrics")
-    );
 
     const xyX = xyXRaw != null ? parseFloat(xyXRaw) : undefined;
     const xyY = xyYRaw != null ? parseFloat(xyYRaw) : undefined;
 
-    /* ── Cached metrics path (XY drag / era switch — no audio re-upload) ── */
+    /* Reuse the last metrics when only the XY pad or era changed. */
     if (cachedMetricsRaw) {
       let metrics: AudioMetrics;
       let cachedPayload: CachedMetricsPayload;
       try {
         cachedPayload = JSON.parse(cachedMetricsRaw) as CachedMetricsPayload;
-        metrics = completeMetrics(cachedPayload, eraId);
+        // The metrics are fully complete from the previous successful backend run
+        metrics = cachedPayload as unknown as AudioMetrics;
       } catch {
         return NextResponse.json(
           { error: "analysis_failed", message: "Invalid cached metrics JSON." },
@@ -1154,12 +1201,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const prompt = buildPrompt(metrics, daw, eraId, xyX, xyY);
+      const prompt = buildPrompt(metrics, daw, eraId, vocalRoleId, xyX, xyY);
       const result = await callClaudeWithRetry({
         prompt,
         metrics,
         daw,
         eraId,
+        vocalRoleId,
+        roleSource,
         xyX,
         xyY,
       });
@@ -1180,7 +1229,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ── Full analysis path ── */
+    /* Full analysis path */
     const projectId = (formData.get("projectId") as string) || null;
     const vocalAssetId = (formData.get("vocalAssetId") as string) || null;
     const beatAssetId = (formData.get("beatAssetId") as string) || null;
@@ -1223,7 +1272,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error: "file_too_large",
-          message: "Vocal file exceeds 20 MB limit.",
+          message: "Vocal file exceeds 50 MB limit.",
         },
         { status: 413 }
       );
@@ -1233,23 +1282,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error: "file_too_large",
-          message: "Beat file exceeds 20 MB limit.",
+          message: "Beat file exceeds 50 MB limit.",
         },
         { status: 413 }
       );
     }
 
     /* Call Python audio analysis service */
-    const audio = await analyzeAudio(vocalFile, beatFile, eraId, clientMetrics);
+    const audio = await analyzeAudio(vocalFile, beatFile);
     const { metrics } = audio;
 
     /* Build prompt and call Claude */
-    const prompt = buildPrompt(metrics, daw, eraId);
+    const prompt = buildPrompt(metrics, daw, eraId, vocalRoleId);
     const result = await callClaudeWithRetry({
       prompt,
       metrics,
       daw,
       eraId,
+      vocalRoleId,
+      roleSource,
     });
 
     return NextResponse.json({

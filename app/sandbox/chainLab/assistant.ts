@@ -188,7 +188,7 @@ export function buildAssistantModel(
     });
   }
 
-  if ((metrics.lowEndEnergy ?? 0) > 0.36 || (metrics.lowMidBuildup ?? 0) > 0.0002) {
+  if ((metrics.lowMidBuildup ?? 0) > 0.0002) {
     issues.push({
       id: "low_end",
       severity: "warning",

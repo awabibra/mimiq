@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AudioMetrics, ChainStep, EvaluationResult } from "@/lib/types";
+import type { AudioMetrics, EvaluationResult } from "@/lib/types";
 import {
   buildMetricReadouts,
-  formatPresenceBand,
   hasMeasuredProvenance,
   measuredFitForProvenance,
   type AnalysisProvenance,
@@ -12,9 +11,15 @@ const metrics: AudioMetrics = {
   lufs: -17,
   dynamicRange: 8,
   spectralCentroid: 2400,
-  lowEndEnergy: 0.2,
+  truePeak: -3,
+  harshness: 0,
+  lowMidBuildup: 0,
+  noiseFloorDb: -50,
+  sibilancePeak: -20,
+  dynamicInconsistency: 0,
   stereoWidth: 0.1,
-  reverbEstimate: 0.08,
+  crestFactor: 12,
+  spectralEnvelope: Array(30).fill(0),
 };
 
 const measured: AnalysisProvenance = {
@@ -39,9 +44,9 @@ const fit = (value: EvaluationResult["measured_fit"]) => value;
 
 describe("Chain Lab metric helpers", () => {
   it("labels measured metrics separately from fallback estimates", () => {
-    const measuredReadouts = buildMetricReadouts(null, metrics, [], "golden", measured);
-    const fallbackReadouts = buildMetricReadouts(null, metrics, [], "golden", fallback);
-    const errorReadouts = buildMetricReadouts(null, metrics, [], "golden", errorProvenance);
+    const measuredReadouts = buildMetricReadouts(null, metrics, [], "modern_rap", measured);
+    const fallbackReadouts = buildMetricReadouts(null, metrics, [], "modern_rap", fallback);
+    const errorReadouts = buildMetricReadouts(null, metrics, [], "modern_rap", errorProvenance);
 
     expect(measuredReadouts[0]?.source).toBe("measured");
     expect(fallbackReadouts[0]?.source).toBe("estimated");
@@ -62,18 +67,4 @@ describe("Chain Lab metric helpers", () => {
     expect(feedbackFit).toBe("unknown");
   });
 
-  it("falls back to chain-derived presence when harshness is unavailable", () => {
-    const chain: ChainStep[] = [
-      {
-        step: 1,
-        tool: "Presence EQ",
-        action: "Boost +2.5 dB at 3.5 kHz.",
-        reason: "Lift vocal focus.",
-        role: "additive_eq",
-      },
-    ];
-
-    expect(formatPresenceBand(null, chain)).toBe("+2.5 dB");
-    expect(buildMetricReadouts(null, metrics, chain, "golden", measured)[3]?.source).toBe("chain");
-  });
 });

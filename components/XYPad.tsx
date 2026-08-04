@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import styles from "./XYPad.module.css";
 
-/* ── Chain state presets ── */
+/* Chain state presets */
 
 interface ChainState {
   label: string;
@@ -12,7 +12,7 @@ interface ChainState {
 
 const chainStates: ChainState[] = [
   {
-    /* index 0 — wet + dark → moody, ambient */
+    /* wet and dark */
     label: "Warm & Intimate",
     steps: [
       "1. High-pass — 80 Hz, 12dB/oct",
@@ -22,7 +22,7 @@ const chainStates: ChainState[] = [
     ],
   },
   {
-    /* index 1 — center → neutral, balanced */
+    /* neutral */
     label: "Balanced & Present",
     steps: [
       "1. High-pass — 100 Hz, 18dB/oct",
@@ -32,7 +32,7 @@ const chainStates: ChainState[] = [
     ],
   },
   {
-    /* index 2 — wet + bright → airy, open */
+    /* wet and bright */
     label: "Airy & Spacious",
     steps: [
       "1. High-pass — 120 Hz, 18dB/oct",
@@ -42,7 +42,7 @@ const chainStates: ChainState[] = [
     ],
   },
   {
-    /* index 3 — dry + dark → compressed, heavy */
+    /* dry and dark */
     label: "Dark & Compressed",
     steps: [
       "1. High-pass — 60 Hz, 12dB/oct",
@@ -52,7 +52,7 @@ const chainStates: ChainState[] = [
     ],
   },
   {
-    /* index 4 — dry + bright → clean, cutting */
+    /* dry and bright */
     label: "Clean & Forward",
     steps: [
       "1. High-pass — 150 Hz, 24dB/oct",
@@ -89,8 +89,7 @@ export function XYPad() {
       if (!start) start = ts;
       const t = (ts - start) / 1000;
 
-      /* Lissajous drift — different frequencies keep
-         the path non-repetitive for ~63 s */
+      /* Different speeds keep the cursor from falling into a short loop. */
       const x = 0.5 + 0.38 * Math.sin(t * 0.3);
       const y = 0.5 + 0.38 * Math.cos(t * 0.2);
 
@@ -130,7 +129,7 @@ export function XYPad() {
 
   return (
     <div className={styles.container}>
-      {/* ── XY Pad ── */}
+      {/* XY Pad */}
       <div className={styles.pad}>
         <span className={`${styles.axisLabel} ${styles.axisTop}`}>Bright</span>
         <span className={`${styles.axisLabel} ${styles.axisBottom}`}>Dark</span>
@@ -142,7 +141,7 @@ export function XYPad() {
         <div ref={dotRef} className={styles.dot} />
       </div>
 
-      {/* ── Chain output ── */}
+      {/* Chain output */}
       <div
         className={`${styles.chainOutput} ${styles.chainFade} ${
           fading ? styles.chainFadeOut : styles.chainFadeIn

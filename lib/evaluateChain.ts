@@ -160,7 +160,7 @@ export function evaluateChain(
   const lufs = metric(metrics.lufs);
   const dynamicRange = metric(metrics.dynamicRange);
   const centroid = metric(metrics.spectralCentroid);
-  const truePeak = metric(metrics.truePeak ?? metrics.truePeakEstimateDb);
+  const truePeak = metric(metrics.truePeak);
   const sibilancePeak = metric(metrics.sibilancePeak);
   const harshness = metric(metrics.harshness);
   const needsDeesser =

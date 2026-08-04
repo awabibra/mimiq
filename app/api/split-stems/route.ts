@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  assertAuthenticatedRequest,
   assetResolutionResponse,
   resolveProjectAssetFile,
 } from "@/lib/serverProjectAudio";
+import { issueStemJobToken } from "@/lib/serverStemJob";
+import type { StemSplitJobResponse } from "@/lib/types";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = [".wav", ".mp3", ".flac"];
@@ -41,6 +44,8 @@ export async function POST(req: NextRequest) {
     const projectId = (formData.get("projectId") as string) || null;
     const sourceAssetId = (formData.get("sourceAssetId") as string) || null;
     let audio = formData.get("audio") as File | null;
+    let tokenProjectId = "";
+    let tokenSourceAssetId = "";
     const mode = parseMode(formData.get("mode"));
     const model =
       typeof formData.get("model") === "string"
@@ -57,16 +62,12 @@ export async function POST(req: NextRequest) {
           label: "Stem source",
         });
         audio = asset?.file ?? audio;
+        tokenProjectId = projectId ?? "";
+        tokenSourceAssetId = sourceAssetId;
       } else {
-        // Enforce auth even for raw file uploads to protect the audio service
-        const auth = req.headers.get("authorization") ?? "";
-        const token = auth.split(" ")[1];
-        if (!token) {
-          return NextResponse.json(
-            { error: "auth_required", message: "Sign in to split stems." },
-            { status: 401 }
-          );
-        }
+        const userId = await assertAuthenticatedRequest(req);
+        tokenProjectId = `user:${userId}`;
+        tokenSourceAssetId = "raw-upload";
       }
     } catch (error) {
       const response = assetResolutionResponse(error);
@@ -119,7 +120,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json(await res.json());
+    const payload = await res.json() as StemSplitJobResponse;
+    return NextResponse.json({
+      ...payload,
+      job_token: issueStemJobToken({
+        jobId: payload.job_id,
+        projectId: tokenProjectId,
+        sourceAssetId: tokenSourceAssetId,
+      }),
+    });
   } catch (err) {
     console.error("[split-stems] Unexpected error:", err);
     return NextResponse.json(

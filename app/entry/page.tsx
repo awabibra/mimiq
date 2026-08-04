@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { listProjects } from "@/lib/projects";
-import { supabase } from "@/lib/supabase";
+import { getAuthSession } from "@/lib/auth";
 import {
   ENTRY_AUTH_HANDOFF_KEY,
   ENTRY_VISUAL_HANDOFF_KEY,
@@ -42,15 +42,17 @@ export default function EntryPage() {
   useEffect(() => {
     let alive = true;
 
-    supabase.auth.getSession().then(async ({ data }) => {
+    getAuthSession().then(async (auth) => {
       if (!alive) return;
 
-      const hasSession = Boolean(data.session);
-      const nextDestination = hasSession ? "/projects" : "/onboarding";
+      if (!auth) {
+        router.replace("/auth?mode=signup&next=%2Fentry");
+        return;
+      }
+
+      const nextDestination = "/projects";
       router.prefetch(nextDestination);
       setDestination(nextDestination);
-
-      if (!hasSession) return;
 
       try {
         const projects = await listProjects();

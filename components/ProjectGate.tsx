@@ -4,10 +4,15 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import {
-  ACTIVE_PROJECT_STORAGE_KEY,
   rehydrateActiveProject,
   useProject,
 } from "@/lib/useProject";
+import { useAuth } from "@/lib/useAuth";
+import { useStore } from "@/lib/store";
+import {
+  getUserProfile,
+  isOnboardingComplete,
+} from "@/lib/userProfile";
 import { Logo } from "@/components/ui/logo";
 
 function LoadingScreen() {
@@ -36,30 +41,52 @@ export function ProjectGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
 
-    const stored = window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
-    if (!stored) {
-      const frame = requestAnimationFrame(() => {
-        if (alive) setRehydrating(false);
-      });
+    async function authenticateAndRehydrate() {
+      const auth = await getAuthSession();
+      if (!alive) return;
 
-      return () => {
-        alive = false;
-        cancelAnimationFrame(frame);
-      };
+      if (!auth) {
+        clearActiveProject();
+        router.replace("/auth?mode=signin&next=%2Fprojects");
+        return;
+      }
+
+      useAuth.getState().setAuth(auth.session);
+
+      let profile;
+      try {
+        profile = await getUserProfile(auth.user.id);
+      } catch {
+        clearActiveProject();
+        router.replace("/onboarding");
+        return;
+      }
+
+      if (!alive) return;
+
+      if (!isOnboardingComplete(profile) || !profile?.daw) {
+        clearActiveProject();
+        router.replace("/onboarding");
+        return;
+      }
+
+      useStore.getState().hydrateStudioProfile(profile.daw, profile.plugins);
+
+      try {
+        await rehydrateActiveProject();
+      } catch {
+        clearActiveProject();
+      } finally {
+        if (alive) setRehydrating(false);
+      }
     }
 
-    rehydrateActiveProject()
-      .catch(() => {
-        clearActiveProject();
-      })
-      .finally(() => {
-        if (alive) setRehydrating(false);
-      });
+    void authenticateAndRehydrate();
 
     return () => {
       alive = false;
     };
-  }, [clearActiveProject]);
+  }, [clearActiveProject, router]);
 
   useEffect(() => {
     if (rehydrating || activeProject) return;
@@ -69,10 +96,7 @@ export function ProjectGate({ children }: { children: ReactNode }) {
     getAuthSession().then((auth) => {
       if (!alive) return;
 
-      if (!auth) {
-        router.replace("/");
-        return;
-      }
+      if (!auth) return;
 
       setPrompt("Select or create a project to continue.");
       router.replace("/projects?prompt=select-project");
